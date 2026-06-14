@@ -223,4 +223,52 @@ suite('floors routes (integration)', () => {
     });
     expect(del.status).toBe(404);
   });
+
+  // ── Pins are devices: click-to-place / drag-to-reposition / RBAC ────────────
+  test('a pin (device) can be placed at %-coords and dragged, with reads blocked for viewers', async () => {
+    // Add-at-click: POST a device with x/y onto the (revived) test floor.
+    const create = await api('/api/devices', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        hotelId: 'rh2',
+        floorId: `${SLUG_PREFIX}alpha`,
+        computerName: `${DEV_PREFIX}PIN-1`,
+        type: 'Desktop',
+        status: 'active',
+        x: 12.3,
+        y: 45.6,
+      }),
+    });
+    expect(create.status).toBe(201);
+    const pin = await create.json();
+    expect(pin.x).toBe(12.3);
+    expect(pin.y).toBe(45.6);
+
+    // Drag → %-persist: PATCH new coordinates.
+    const moved = await api(`/api/devices/${pin.id}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ x: 80.1, y: 20.9 }),
+    });
+    expect(moved.status).toBe(200);
+    const after = await moved.json();
+    expect(after.x).toBe(80.1);
+    expect(after.y).toBe(20.9);
+
+    // Read-only: a viewer cannot move or delete the pin.
+    const viewerMove = await api(`/api/devices/${pin.id}`, {
+      method: 'PATCH',
+      headers: authed(viewer, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ x: 1, y: 1 }),
+    });
+    expect(viewerMove.status).toBe(403);
+
+    const viewerDel = await api(`/api/devices/${pin.id}`, { method: 'DELETE', headers: authed(viewer) });
+    expect(viewerDel.status).toBe(403);
+
+    // Admin delete cleans the pin up.
+    const adminDel = await api(`/api/devices/${pin.id}`, { method: 'DELETE', headers: authed(admin) });
+    expect(adminDel.status).toBe(200);
+  });
 });

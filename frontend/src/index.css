@@ -7,23 +7,27 @@
 
 /* ─────────────────────────────────────────────────────────────────────────
    Ops Monitor — multi-property IT operations dashboard
-   Palette ported verbatim from the Claude Design prototype.
-   Accent #2563EB · status ok/warn/nodata/bad · ink/surface/line scales.
+   Neutral shadcn (b0) oklch theme: monochrome surface/ink/line ramp + a
+   near-black/near-white primary ("brand"). Status hues (ok/warn/nodata/bad/
+   offline) are deliberately kept vivid so the floor-map pins & legend read.
    Fonts: IBM Plex Sans Thai (UI) + IBM Plex Mono (ids / IPs).
    ───────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* Prototype semantic palette (light) */
-  --bg: #f2f5f8;
-  --surface: #ffffff;
-  --surface2: #f7f9fb;
-  --line: #e2e8ef;
-  --line2: #edf1f5;
-  --ink: #15222f;
-  --ink2: #54657a;
-  --ink3: #8a99ab;
-  --brand: #2563eb;
-  --brand-soft: rgba(37, 99, 235, 0.1);
+  /* Neutral surface / ink / line ramp (light) */
+  --bg: oklch(0.985 0 0);
+  --surface: oklch(1 0 0);
+  --surface2: oklch(0.97 0 0);
+  --line: oklch(0.922 0 0);
+  --line2: oklch(0.95 0 0);
+  --ink: oklch(0.145 0 0);
+  --ink2: oklch(0.45 0 0);
+  --ink3: oklch(0.62 0 0);
+  --brand: oklch(0.205 0 0);
+  --brand-foreground: oklch(0.985 0 0);
+  --brand-soft: oklch(0 0 0 / 0.06);
+
+  /* Status palette — kept vivid for map / legend legibility */
   --ok: #17a05e;
   --warn: #e0851f;
   --nodata: #c2a008;
@@ -36,55 +40,60 @@
   --offline-soft: rgba(148, 163, 184, 0.16);
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 4px 16px rgba(16, 24, 40, 0.07);
 
-  /* shadcn contract — mapped onto the prototype palette */
-  --background: var(--bg);
-  --foreground: var(--ink);
-  --card: var(--surface);
-  --card-foreground: var(--ink);
-  --popover: var(--surface);
-  --popover-foreground: var(--ink);
-  --primary: var(--brand);
-  --primary-foreground: #ffffff;
-  --secondary: var(--surface2);
-  --secondary-foreground: var(--ink);
-  --muted: var(--surface2);
-  --muted-foreground: var(--ink2);
-  --accent: var(--surface2);
-  --accent-foreground: var(--ink);
-  --destructive: var(--bad);
-  --destructive-foreground: #ffffff;
-  --border: var(--line);
-  --input: var(--line);
-  --ring: var(--brand);
+  /* shadcn contract — neutral oklch (b0 preset) */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
 
+  /* charts: brand + the status hues so the availability chart stays meaningful */
   --chart-1: var(--brand);
   --chart-2: var(--ok);
   --chart-3: var(--warn);
   --chart-4: var(--nodata);
   --chart-5: var(--bad);
 
-  --sidebar: var(--surface);
-  --sidebar-foreground: var(--ink);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: var(--brand);
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: var(--brand-foreground);
   --sidebar-accent: var(--brand-soft);
   --sidebar-accent-foreground: var(--brand);
-  --sidebar-border: var(--line);
-  --sidebar-ring: var(--brand);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
-  --bg: #0d1319;
-  --surface: #151c24;
-  --surface2: #1b242e;
-  --line: #27313d;
-  --line2: #202a35;
-  --ink: #e7edf4;
-  --ink2: #9dacbc;
-  --ink3: #64748b;
-  --brand: #2563eb;
-  --brand-soft: rgba(96, 148, 255, 0.16);
+  /* Neutral surface / ink / line ramp (dark) */
+  --bg: oklch(0.145 0 0);
+  --surface: oklch(0.205 0 0);
+  --surface2: oklch(0.269 0 0);
+  --line: oklch(1 0 0 / 10%);
+  --line2: oklch(1 0 0 / 6%);
+  --ink: oklch(0.985 0 0);
+  --ink2: oklch(0.708 0 0);
+  --ink3: oklch(0.556 0 0);
+  --brand: oklch(0.922 0 0);
+  --brand-foreground: oklch(0.205 0 0);
+  --brand-soft: oklch(1 0 0 / 0.12);
+
+  /* Status palette (dark variants) */
   --ok: #2bc579;
   --warn: #f0a03c;
   --nodata: #e0c232;
@@ -97,8 +106,41 @@
   --offline-soft: rgba(100, 116, 139, 0.2);
   --shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.35);
 
-  --destructive-foreground: #2a0c0e;
-  --primary-foreground: #ffffff;
+  /* shadcn contract — neutral oklch (b0 preset) */
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+
+  --chart-1: var(--brand);
+  --chart-2: var(--ok);
+  --chart-3: var(--warn);
+  --chart-4: var(--nodata);
+  --chart-5: var(--bad);
+
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-foreground);
+  --sidebar-accent: var(--brand-soft);
+  --sidebar-accent-foreground: var(--brand);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 /* ── Tailwind v4 token mapping ── */
@@ -117,6 +159,7 @@
   --color-ink3: var(--ink3);
   --color-brand: var(--brand);
   --color-brand-soft: var(--brand-soft);
+  --color-brand-foreground: var(--brand-foreground);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-nodata: var(--nodata);

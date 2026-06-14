@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Search, Plus, Minus, Maximize, RotateCw, X, Crosshair, Cctv, Wifi, Monitor, Pencil, Check } from 'lucide-react';
+import {
+  Search, Plus, Minus, Maximize, RotateCw, RotateCcw, X, Crosshair,
+  Cctv, Wifi, Monitor, Pencil, Trash2, Copy, Check,
+} from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { DeviceDialog, type DeviceTab } from '@/components/device-dialog';
+import { useDeleteDevice } from '@/lib/devices';
+import { buildPinConfig } from '@/lib/pin-config';
 import { statusMeta, type Device, type FloorWithPins } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 type View = { x: number; y: number; z: number };
 type Kind = 'workstation' | 'cctv';
+
+// Live monitoring auto-refreshes the floor data on a fixed cadence (matches the
+// prototype's auto-refresh interval indicator).
+const AUTO_REFRESH_SEC = 60;
 
 function normPinStatus(d: Device | undefined, isCam: boolean): string {
   if (d && statusMeta(d.status) && ['active', 'paused', 'nodata', 'rec', 'offline'].includes(d.status))
@@ -24,6 +33,7 @@ export function FloorMapView({
   activeFloorId,
   focus,
   isLoading,
+  isFetching,
   isError,
   onRefresh,
 }: {
@@ -34,9 +44,13 @@ export function FloorMapView({
   activeFloorId: string;
   focus?: string;
   isLoading: boolean;
+  // True during background refetches too (React Query keeps isLoading false once
+  // data is cached). Drives the auto-refresh indicator; falls back to isLoading.
+  isFetching?: boolean;
   isError: boolean;
   onRefresh: () => void;
 }) {
+  const fetching = isFetching ?? isLoading;
   const isCam = kind === 'cctv';
   const floor = useMemo(
     () => floors.find((f) => f.id === activeFloorId) ?? floors[0],
@@ -66,7 +80,12 @@ export function FloorMapView({
   // ── pin editing (floors:crud / cctv:crud) ──────────────────────────────────
   const queryClient = useQueryClient();
   const [editMode, setEditMode] = useState(false);
-  const [movedCount, setMovedCount] = useState(0);
+  // Coordinates captured when Edit mode is entered — drives the "N moved"
+  // counter and Reset (revert this session's moves to where they started).
+  const [baseline, setBaseline] = useState<Record<string, { x: number; y: number }>>({});
+  const [copied, setCopied] = useState(false);
+  const [editDevice, setEditDevice] = useState<Device | null>(null);
+  const deleteDevice = useDeleteDevice(hotelId);
   // Live + optimistic positions, applied on top of server data while a PATCH
   // is in flight so the pin never snaps back.
   const [livePos, setLivePos] = useState<Record<string, { x: number; y: number }>>({});
@@ -90,11 +109,14 @@ export function FloorMapView({
       ];
   const placeNoun = placeOptions.find((o) => o.tab === placeType)?.noun ?? 'a device';
 
+  // ── auto-refresh (live countdown + "last updated") ──────────────────────────
+  const [countdown, setCountdown] = useState(AUTO_REFRESH_SEC);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
   const movePin = useMutation({
     mutationFn: (v: { id: number; name: string; x: number; y: number }) =>
       api.devices[':id'].$patch({ param: { id: String(v.id) }, json: { x: v.x, y: v.y } }).then(unwrap),
     onSuccess: async (_d, v) => {
-      setMovedCount((n) => n + 1);
       if (hotelId) await queryClient.invalidateQueries({ queryKey: ['floors', hotelId] });
       setLivePos((prev) => {
         const next = { ...prev };
@@ -156,6 +178,21 @@ export function FloorMapView({
     if (!canEdit && editMode) setEditMode(false);
   }, [canEdit, editMode]);
 
+  // Snapshot pin positions when entering Edit mode (or switching floor while in
+  // it) so "N moved" and Reset have a baseline to compare/revert against.
+  useEffect(() => {
+    if (!editMode) {
+      setBaseline({});
+      return;
+    }
+    const snap: Record<string, { x: number; y: number }> = {};
+    (floor?.pins ?? []).forEach((p) => {
+      if (p.x != null && p.y != null) snap[p.computerName] = { x: p.x, y: p.y };
+    });
+    setBaseline(snap);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, floor?.id]);
+
   // Convert a click on the canvas to %-coords on the plan, then open the
   // pre-filled device dialog so the new pin lands exactly where you clicked.
   const placeAt = useCallback((clientX: number, clientY: number) => {
@@ -185,12 +222,94 @@ export function FloorMapView({
     if (!canEdit) setPlaceType(null);
   }, [canEdit]);
 
+  // Stamp the last-updated time and reset the countdown whenever a fetch settles.
+  const wasFetchingRef = useRef(false);
+  useEffect(() => {
+    const settled = !fetching && !isError;
+    if ((wasFetchingRef.current && settled) || (settled && lastUpdated === null)) {
+      setLastUpdated(Date.now());
+      setCountdown(AUTO_REFRESH_SEC);
+    }
+    wasFetchingRef.current = fetching;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetching, isError]);
+
+  // Tick the countdown down each second — paused while hidden, fetching, dragging
+  // a pin, or with the place dialog open.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.hidden || fetching || isError || dragRef.current || placeOpen) return;
+      setCountdown((c) => (c <= 1 ? 0 : c - 1));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [fetching, isError, placeOpen]);
+
+  // When the countdown elapses, refetch and reset it.
+  useEffect(() => {
+    if (countdown === 0 && !fetching && !isError) {
+      setCountdown(AUTO_REFRESH_SEC);
+      onRefresh();
+    }
+  }, [countdown, fetching, isError, onRefresh]);
+
   const pins = floor?.pins ?? [];
   const byName = useMemo(() => {
     const m = new Map<string, Device>();
     pins.forEach((p) => m.set(p.computerName, p));
     return m;
   }, [pins]);
+
+  // Pins whose position changed since Edit mode was entered.
+  const movedPins = pins.filter((p) => {
+    const b = baseline[p.computerName];
+    return b && p.x != null && p.y != null && (Math.abs(b.x - p.x) > 0.05 || Math.abs(b.y - p.y) > 0.05);
+  });
+  const movedCount = movedPins.length;
+
+  // Copy the floor's pin layout as a paste-ready config block.
+  const copyConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(buildPinConfig(pins, isCam));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error('Could not copy to clipboard');
+    }
+  };
+
+  // Revert this session's moves back to where they were when Edit mode started.
+  const resetMoves = async () => {
+    if (movedPins.length === 0) return;
+    const n = movedPins.length;
+    if (!window.confirm(`Revert ${n} pin${n > 1 ? 's' : ''} to ${n > 1 ? 'their' : 'its'} position when Edit mode started?`)) return;
+    try {
+      await Promise.all(
+        movedPins.map((p) =>
+          api.devices[':id'].$patch({ param: { id: String(p.id) }, json: baseline[p.computerName] }).then(unwrap)
+        )
+      );
+      if (hotelId) await queryClient.invalidateQueries({ queryKey: ['floors', hotelId] });
+      toast.success(`Reverted ${n} move${n > 1 ? 's' : ''}`);
+    } catch {
+      toast.error('Could not reset positions');
+    }
+  };
+
+  // Delete a pin (and its device row) from the detail drawer.
+  const deleteSelected = (d: Device) => {
+    if (!window.confirm(`Delete ${d.computerName}? It is removed from the inventory and the map.`)) return;
+    deleteDevice.mutate(d.id, {
+      onSuccess: () => {
+        toast.success(`${d.computerName} deleted`);
+        setDrawerOpen(false);
+        setSelectedId(null);
+      },
+      onError: (e: Error) => toast.error(e.message),
+    });
+  };
+
+  // Tab for the edit dialog: cameras on a cctv floor, else AP vs workstation.
+  const editTab: DeviceTab = isCam ? 'cam' : editDevice?.isAp ? 'ap' : 'ws';
 
   // ── view math (ported from the prototype) ──────────────────────────────────
   const applyView = useCallback((v: View, animate: boolean, nextFit?: number) => {
@@ -397,6 +516,17 @@ export function FloorMapView({
   const ready = !isLoading && !isError;
   const isEmpty = ready && pins.length === 0;
 
+  const secsAgo = lastUpdated !== null ? Math.floor((Date.now() - lastUpdated) / 1000) : null;
+  const lastUpdatedText =
+    secsAgo === null
+      ? ''
+      : secsAgo < 5
+        ? 'Updated just now'
+        : secsAgo < 60
+          ? `Updated ${secsAgo}s ago`
+          : `Updated ${Math.floor(secsAgo / 60)}m ago`;
+  const countdownText = fetching ? 'Refreshing…' : `Auto-refresh in ${countdown}s`;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Summary strip */}
@@ -412,6 +542,13 @@ export function FloorMapView({
           </div>
         ))}
         <div className="flex-1" />
+        {lastUpdated !== null && (
+          <div className="flex items-center gap-2 whitespace-nowrap text-[12px] text-ink3">
+            {lastUpdatedText && <span className="hidden sm:inline">{lastUpdatedText}</span>}
+            {lastUpdatedText && <span className="hidden sm:inline">·</span>}
+            <span className="tabular-nums">{countdownText}</span>
+          </div>
+        )}
         {canEdit && (
           <>
             {placeOptions.map((o) => {
@@ -427,7 +564,7 @@ export function FloorMapView({
                   title={`Click on the map to place ${o.noun}`}
                   className={cn(
                     'flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-semibold disabled:opacity-50',
-                    on ? 'border-brand bg-brand text-white' : 'border-line bg-surface text-ink2 hover:text-ink'
+                    on ? 'border-brand bg-brand text-brand-foreground' : 'border-line bg-surface text-ink2 hover:text-ink'
                   )}
                 >
                   <o.Icon size={13} />
@@ -443,7 +580,7 @@ export function FloorMapView({
               title="Reposition pins on the floor plan"
               className={cn(
                 'flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-semibold',
-                editMode ? 'border-brand bg-brand text-white' : 'border-line bg-surface text-ink2 hover:text-ink'
+                editMode ? 'border-brand bg-brand text-brand-foreground' : 'border-line bg-surface text-ink2 hover:text-ink'
               )}
             >
               {editMode ? <Check size={13} /> : <Pencil size={13} />}
@@ -456,7 +593,7 @@ export function FloorMapView({
           title="Refresh now"
           className="flex size-[30px] items-center justify-center rounded-lg border border-line bg-surface text-ink2 hover:bg-surface2 hover:text-ink"
         >
-          <RotateCw size={14} className={isLoading ? 'animate-spin' : ''} />
+          <RotateCw size={14} className={fetching ? 'animate-spin' : ''} />
         </button>
       </div>
 
@@ -645,17 +782,31 @@ export function FloorMapView({
             </div>
           </div>
 
-          {/* Edit-mode banner */}
+          {/* Edit-mode toolbar */}
           {editMode && (
-            <div className="absolute bottom-[14px] left-1/2 z-[35] flex -translate-x-1/2 items-center gap-[10px] rounded-xl border-[1.5px] border-brand bg-surface p-[8px_14px] shadow-[var(--shadow)]">
+            <div className="absolute bottom-[14px] left-1/2 z-[35] flex max-w-[calc(100%-28px)] -translate-x-1/2 flex-wrap items-center justify-center gap-[8px] rounded-xl border-[1.5px] border-brand bg-surface p-[7px_12px] shadow-[var(--shadow)]">
               <span className="whitespace-nowrap text-[12px] font-semibold text-ink">
                 Edit mode — drag pins to reposition
               </span>
-              {movedCount > 0 && (
-                <span className="whitespace-nowrap text-[11.5px] text-ink3">
-                  {movedCount} saved
-                </span>
-              )}
+              <span className="whitespace-nowrap text-[11.5px] tabular-nums text-ink3">{movedCount} moved</span>
+              <span className="h-4 w-px bg-line" />
+              <button
+                onClick={copyConfig}
+                title="Copy this floor's pin layout as a config block"
+                className="flex h-[28px] items-center gap-[5px] rounded-[7px] border border-line bg-surface px-[10px] text-[11.5px] font-semibold text-ink2 hover:text-ink"
+              >
+                {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
+                {copied ? 'Copied' : 'Copy config'}
+              </button>
+              <button
+                onClick={resetMoves}
+                disabled={movedCount === 0}
+                title="Revert this session's moves"
+                className="flex h-[28px] items-center gap-[5px] rounded-[7px] border border-line bg-surface px-[10px] text-[11.5px] font-semibold text-ink2 hover:text-ink disabled:opacity-45"
+              >
+                <RotateCcw size={13} />
+                Reset
+              </button>
             </div>
           )}
 
@@ -682,7 +833,7 @@ export function FloorMapView({
               <div className="text-[13.5px] font-bold text-ink">Couldn't load floor data</div>
               <button
                 onClick={onRefresh}
-                className="mt-1 h-8 rounded-lg bg-brand px-[18px] text-[12.5px] font-semibold text-white"
+                className="mt-1 h-8 rounded-lg bg-brand px-[18px] text-[12.5px] font-semibold text-brand-foreground"
               >
                 Retry
               </button>
@@ -704,11 +855,14 @@ export function FloorMapView({
             device={selected}
             floor={floor}
             isCam={isCam}
+            canEdit={canEdit}
             onClose={() => {
               setDrawerOpen(false);
               setSelectedId(null);
             }}
             onFocus={() => focusPin(selected.computerName)}
+            onEdit={() => setEditDevice(selected)}
+            onDelete={() => deleteSelected(selected)}
           />
         )}
 
@@ -725,6 +879,20 @@ export function FloorMapView({
             device={null}
             floors={floors}
             placement={placePos ? { floorId: floor.id, x: placePos.x, y: placePos.y } : null}
+          />
+        )}
+
+        {/* Edit-pin dialog (from the detail drawer) */}
+        {editDevice && (
+          <DeviceDialog
+            open={!!editDevice}
+            onOpenChange={(v) => {
+              if (!v) setEditDevice(null);
+            }}
+            hotelId={hotelId}
+            tab={editTab}
+            device={editDevice}
+            floors={floors}
           />
         )}
       </div>
@@ -826,8 +994,10 @@ function Pin(props: {
             style={{ position: 'absolute', inset: 4, borderRadius: '50%', background: color }}
           />
         )}
+        {/* Selection ring sits on the always-white plan, so it uses a fixed
+            neutral dark (not the theme-inverting --brand) to stay visible. */}
         {props.selected && (
-          <span style={{ position: 'absolute', inset: -2, borderRadius: '50%', border: '2px solid var(--brand)' }} />
+          <span style={{ position: 'absolute', inset: -2, borderRadius: '50%', border: '2px solid oklch(0.205 0 0)' }} />
         )}
         {isDot && (
           <span
@@ -887,7 +1057,7 @@ function Pin(props: {
               transform: 'translateX(-50%)',
               whiteSpace: 'nowrap',
               background: props.selected ? 'var(--brand)' : 'var(--surface)',
-              color: props.selected ? '#fff' : 'var(--ink)',
+              color: props.selected ? 'var(--brand-foreground)' : 'var(--ink)',
               fontSize: 11,
               fontWeight: 600,
               padding: '3px 8px',
@@ -949,14 +1119,20 @@ function DetailDrawer({
   device,
   floor,
   isCam,
+  canEdit,
   onClose,
   onFocus,
+  onEdit,
+  onDelete,
 }: {
   device: Device;
   floor: FloorWithPins;
   isCam: boolean;
+  canEdit: boolean;
   onClose: () => void;
   onFocus: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const st = normPinStatus(device, isCam);
   const meta = statusMeta(st);
@@ -1026,14 +1202,32 @@ function DetailDrawer({
           </div>
         ))}
       </div>
-      <div className="border-t border-line p-[12px_18px]">
+      <div className="flex gap-2 border-t border-line p-[12px_18px]">
         <button
           onClick={onFocus}
-          className="flex h-9 w-full items-center justify-center gap-[7px] rounded-[9px] bg-brand text-[13px] font-semibold text-white"
+          className="flex h-9 flex-1 items-center justify-center gap-[7px] rounded-[9px] bg-brand text-[13px] font-semibold text-brand-foreground"
         >
           <Crosshair size={14} />
           Focus on map
         </button>
+        {canEdit && (
+          <button
+            onClick={onEdit}
+            title="Edit details"
+            className="flex size-9 items-center justify-center rounded-[9px] border border-line bg-surface text-ink2 hover:text-ink"
+          >
+            <Pencil size={15} />
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={onDelete}
+            title="Delete"
+            className="flex size-9 items-center justify-center rounded-[9px] border border-line bg-surface text-ink2 hover:border-bad hover:text-bad"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
     </div>
   );

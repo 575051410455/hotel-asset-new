@@ -23,17 +23,19 @@ function WorkstationMap() {
   const { floor, focus } = Route.useSearch();
   const navigate = useNavigate();
   const { activeHotelId, can } = useAuth();
-  const { data: floors = [], isLoading, isError, refetch } = useFloors(activeHotelId, 'workstation');
+  const { data: floors = [], isLoading, isFetching, isError, refetch } = useFloors(activeHotelId, 'workstation');
   const canCrud = can('floors', 'crud');
   const readOnly = !canCrud && can('floors', 'read');
   const [addOpen, setAddOpen] = useState(false);
 
   // Active floor: the one in the URL, else the first available.
   const activeFloorId = floors.find((f) => f.id === floor)?.id ?? floors[0]?.id ?? '';
+  const floorName = floors.find((f) => f.id === activeFloorId)?.name ?? '';
 
   useSetPageHeader(
     {
       title: 'Workstation map',
+      subtitle: floorName ? `Dashboard / Floor map / ${floorName}` : undefined,
       badge: readOnly ? <ReadOnlyBadge /> : undefined,
       actions: (
         <div className="flex items-center gap-2">
@@ -50,7 +52,7 @@ function WorkstationMap() {
         </div>
       ),
     },
-    [floors.map((f) => f.id).join(','), activeFloorId, readOnly, canCrud]
+    [floors.map((f) => f.id).join(','), activeFloorId, floorName, readOnly, canCrud]
   );
 
   return (
@@ -63,6 +65,7 @@ function WorkstationMap() {
         activeFloorId={activeFloorId}
         focus={focus}
         isLoading={isLoading}
+        isFetching={isFetching}
         isError={isError}
         onRefresh={() => refetch()}
       />

@@ -180,7 +180,7 @@ export function FloorDialog({
                 className={cn(
                   'flex size-[22px] flex-none items-center justify-center rounded-full text-[11px] font-bold',
                   i < step
-                    ? 'bg-brand text-white'
+                    ? 'bg-brand text-brand-foreground'
                     : i === step
                       ? 'bg-brand-soft text-brand ring-1 ring-brand'
                       : 'bg-surface2 text-ink3'

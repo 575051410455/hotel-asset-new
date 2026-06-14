@@ -105,6 +105,7 @@ export function DeviceDialog({
   const [computerName, setComputerName] = useState('');
   const [floorId, setFloorId] = useState(defaultFloor);
   const [status, setStatus] = useState(STATUS_OPTS[tab][0].value);
+  const [dir, setDir] = useState(''); // camera view direction in degrees (0 = east)
   const [error, setError] = useState('');
 
   // Reset the form whenever the dialog opens (for the current device/tab).
@@ -118,11 +119,13 @@ export function DeviceDialog({
       setComputerName(device.computerName);
       setFloorId(device.floorId ?? defaultFloor);
       setStatus(device.status);
+      setDir(device.dir != null ? String(device.dir) : '');
     } else {
       setForm({});
       setComputerName('');
       setFloorId(defaultFloor);
       setStatus(STATUS_OPTS[tab][0].value);
+      setDir('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, device]);
@@ -142,6 +145,11 @@ export function DeviceDialog({
       const v = form[fl.key]?.trim();
       base[fl.key] = v ? v : null;
     });
+    // Camera view direction (degrees, 0 = east) — drives the coverage cone.
+    if (tab === 'cam') {
+      const n = Number(dir);
+      base.dir = dir.trim() === '' || !Number.isFinite(n) ? null : ((Math.round(n) % 360) + 360) % 360;
+    }
 
     if (isEdit && device) {
       update.mutate(
@@ -240,6 +248,51 @@ export function DeviceDialog({
               ))}
             </select>
           </label>
+
+          {tab === 'cam' && (
+            <div className="col-span-2 flex flex-col gap-[5px]">
+              <span className="text-[11.5px] font-semibold text-ink2">View direction</span>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={359}
+                  step={5}
+                  value={Number.isFinite(Number(dir)) && dir !== '' ? Number(dir) : 0}
+                  onChange={(e) => setDir(e.target.value)}
+                  className="h-[34px] flex-1 accent-brand"
+                />
+                <input
+                  value={dir}
+                  onChange={(e) => setDir(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="0"
+                  className={`${inputCls} w-[58px] text-center font-mono`}
+                />
+                <span className="text-[12px] text-ink3">°</span>
+                <span className="flex size-[30px] flex-none items-center justify-center rounded-full border border-line bg-surface2 text-brand">
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 16 16"
+                    style={{ transform: `rotate(${Number.isFinite(Number(dir)) ? Number(dir) : 0}deg)` }}
+                  >
+                    <path
+                      d="M2.5 8 H11 M8 5 L11.5 8 L8 11"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </div>
+              <span className="text-[10.5px] text-ink3">
+                0° faces east, increasing clockwise — matches the coverage cone on the map. Leave blank for none.
+              </span>
+            </div>
+          )}
         </div>
 
         {error && (

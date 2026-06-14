@@ -295,7 +295,7 @@ function VerifyCard({ id, code }: { id: string; code: string }) {
           }}
         >
           <div style={{ width: '4mm', height: '4mm', borderRadius: '50%', background: '#2563EB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <BrandMark size={9} />
+            <BrandMark size={9} color="#fff" />
           </div>
         </div>
       </div>

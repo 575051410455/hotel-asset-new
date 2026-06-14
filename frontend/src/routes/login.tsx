@@ -58,7 +58,7 @@ function LoginPage() {
         style={{ background: 'linear-gradient(160deg, #122643 0%, #0B1626 70%)' }}
       >
         <div className="flex items-center gap-[11px]">
-          <div className="flex size-[34px] items-center justify-center rounded-[9px] bg-brand">
+          <div className="flex size-[34px] items-center justify-center rounded-[9px] bg-brand text-brand-foreground">
             <RadarIcon />
           </div>
           <div className="text-[16px] font-bold tracking-[-0.01em]">Ops Monitor</div>
@@ -132,7 +132,7 @@ function LoginPage() {
             <button
               onClick={submit}
               disabled={login.isPending}
-              className="h-[42px] rounded-[10px] bg-brand text-[14px] font-bold text-white transition-opacity disabled:opacity-70"
+              className="h-[42px] rounded-[10px] bg-brand text-[14px] font-bold text-brand-foreground transition-opacity disabled:opacity-70"
             >
               {login.isPending ? 'Signing in…' : 'Sign in'}
             </button>
@@ -179,9 +179,9 @@ function LoginPage() {
 function RadarIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="2" fill="#fff" />
-      <circle cx="8" cy="8" r="4.6" stroke="#fff" strokeOpacity="0.55" strokeWidth="1.3" />
-      <circle cx="8" cy="8" r="7" stroke="#fff" strokeOpacity="0.25" strokeWidth="1.2" />
+      <circle cx="8" cy="8" r="2" fill="currentColor" />
+      <circle cx="8" cy="8" r="4.6" stroke="currentColor" strokeOpacity="0.55" strokeWidth="1.3" />
+      <circle cx="8" cy="8" r="7" stroke="currentColor" strokeOpacity="0.25" strokeWidth="1.2" />
     </svg>
   );
 }

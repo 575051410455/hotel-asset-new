@@ -19,6 +19,7 @@ backend/uploads/
 
 # Not published to this repository
 _extracted/
+_design-new/
 _smoke/
 *.zip
 
