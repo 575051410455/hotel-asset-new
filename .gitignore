@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment / secrets (keep the example template)
+.env
+.env.*
+!.env.example
+
+# Runtime user uploads (floor-plan images)
+backend/uploads/
+
+# Local Claude Code tooling config
+.claude/
+
+# Not published to this repository
+_extracted/
+_smoke/
+*.zip
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
