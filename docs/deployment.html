@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ops Monitor — Deploy on Docker Compose + Nginx (Ubuntu 24.04 VPS)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f5f6f8; --surface:#fff; --surface2:#f1f3f6; --line:#e2e6ec; --line2:#eef1f5;
+    --ink:#16202b; --ink2:#56636f; --ink3:#8a96a3;
+    --accent:#16202b; --accent-soft:#eceef1;
+    --ok:#17a05e; --warn:#e0851f; --bad:#d6454f; --info:#2563eb;
+    --code-bg:#0e1420; --code-ink:#dfe7f1; --code-dim:#7f8ea3; --code-key:#8ec07c; --code-str:#e6c07b; --code-cmt:#6b7b8c;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 6px 22px rgba(16,24,40,.07);
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans Thai','Segoe UI',system-ui,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  code,pre,.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+
+  /* layout */
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px;display:grid;grid-template-columns:240px 1fr;gap:38px}
+  @media(max-width:980px){.wrap{grid-template-columns:1fr;gap:0}.toc{display:none!important}}
+  main{min-width:0;padding:14px 0 90px}
+
+  /* hero */
+  header.hero{background:linear-gradient(160deg,#11202f 0%,#0a1622 70%);color:#e8eff8;padding:44px 0 40px;margin-bottom:8px}
+  header.hero .wrap{display:block;max-width:1180px}
+  .badge-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#dbe6f3}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:#3fb27f}
+  header.hero h1{font-size:33px;font-weight:700;letter-spacing:-.02em;margin:0 0 8px;line-height:1.15}
+  header.hero p{font-size:15px;color:#aebfd0;margin:0;max-width:680px}
+  .logo{display:flex;align-items:center;gap:11px;margin-bottom:20px}
+  .logo .mark{width:34px;height:34px;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center}
+  .logo .name{font-weight:700;font-size:15px}
+
+  /* toc */
+  .toc{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:26px 0 40px}
+  .toc h4{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);margin:0 0 10px}
+  .toc a{display:block;font-size:13px;color:var(--ink2);text-decoration:none;padding:5px 10px;border-radius:7px;border-left:2px solid transparent}
+  .toc a:hover{background:var(--surface2);color:var(--ink)}
+  .toc a.active{color:var(--ink);background:var(--surface);border-left-color:var(--accent);font-weight:600;box-shadow:var(--shadow)}
+  .toc .sub{padding-left:18px;font-size:12.5px}
+
+  /* sections */
+  section{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:26px 28px;margin:18px 0;box-shadow:var(--shadow)}
+  section>h2{font-size:21px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:center;gap:12px;scroll-margin-top:18px}
+  .stepnum{flex:none;width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  section>.lead{color:var(--ink2);font-size:14.5px;margin:2px 0 16px}
+  h3{font-size:15.5px;font-weight:700;margin:24px 0 8px}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:6px 0}
+  a{color:#1f4fb5}
+  hr{border:none;border-top:1px solid var(--line);margin:22px 0}
+  .small{font-size:12.5px;color:var(--ink3)}
+
+  /* cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:16px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:14px 15px;background:var(--surface2)}
+  .card .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);font-weight:700}
+  .card .v{font-size:14px;font-weight:600;margin-top:4px}
+  .card .v small{font-weight:400;color:var(--ink2)}
+
+  /* callouts */
+  .note{border-left:3px solid var(--info);background:#eef3fe;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .warn{border-left:3px solid var(--warn);background:#fdf4e8;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .tip{border-left:3px solid var(--ok);background:#eaf6f0;border-radius:8px;padding:12px 15px;margin:14px 0;font-size:13.5px}
+  .note b,.warn b,.tip b{font-weight:700}
+
+  /* code */
+  .code-card{background:var(--code-bg);border-radius:10px;overflow:hidden;margin:14px 0;border:1px solid #1c2737}
+  .code-head{display:flex;align-items:center;gap:10px;padding:9px 13px;background:#0a0f18;border-bottom:1px solid #1c2737}
+  .code-head .fn{font-family:'IBM Plex Mono';font-size:12px;color:#cdd8e6;font-weight:500}
+  .code-head .lang{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#637691;border:1px solid #283648;border-radius:5px;padding:1px 7px}
+  .code-head .copy{margin-left:auto;font-size:11.5px;color:#9fb0c4;background:#16202e;border:1px solid #283648;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit}
+  .code-head .copy:hover{color:#fff;border-color:#3a4d66}
+  pre{margin:0;padding:14px 16px;overflow:auto;font-size:12.6px;line-height:1.65;color:var(--code-ink)}
+  pre .c{color:var(--code-cmt);font-style:italic}
+  pre .k{color:var(--code-key)}
+  pre .s{color:var(--code-str)}
+  code.inline{background:var(--accent-soft);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px;color:#28323d}
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.3px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line)}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);background:var(--surface2)}
+  td code{font-size:12px}
+
+  /* diagrams */
+  .diagram{border:1px dashed var(--line);border-radius:12px;background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 10px,#f6f8fa 10px,#f6f8fa 20px);padding:22px;margin:16px 0}
+  .box{border:1.5px solid var(--line);border-radius:10px;background:var(--surface);padding:12px 14px;box-shadow:var(--shadow)}
+  .box .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .box .d{font-size:12px;color:var(--ink2);margin-top:3px}
+  .box .port{font-family:'IBM Plex Mono';font-size:11px;color:var(--ink3)}
+  .ico{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex:none}
+  .i-nginx{background:#13a884}.i-bun{background:#111}.i-pg{background:#33679a}.i-vol{background:#7a869a}.i-net{background:#5b6b7e}.i-web{background:#2563eb}
+  .stack{display:flex;flex-direction:column;align-items:center;gap:0}
+  .arrow{color:var(--ink3);font-size:20px;line-height:1;margin:6px 0;text-align:center}
+  .vps{border:2px solid #c8d0da;border-radius:14px;padding:16px;background:rgba(255,255,255,.6);position:relative;margin-top:6px}
+  .vps>.label{position:absolute;top:-11px;left:14px;background:var(--ink);color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 10px;border-radius:6px}
+  .net{border:1.5px dashed #b9c3cf;border-radius:11px;padding:14px;margin-top:10px;position:relative}
+  .net>.label{position:absolute;top:-10px;left:12px;background:var(--surface);color:var(--ink2);font-size:10.5px;font-weight:700;padding:1px 9px;border-radius:5px;border:1px solid var(--line)}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:640px){.row3{grid-template-columns:1fr}}
+  .vols{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .vchip{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--ink2)}
+
+  /* flow steps */
+  .flow{counter-reset:f;margin:16px 0}
+  .fstep{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:10px 0;border-bottom:1px dashed var(--line2)}
+  .fstep:last-child{border-bottom:none}
+  .fstep .n{counter-increment:f;width:30px;height:30px;border-radius:50%;background:var(--accent-soft);border:1px solid var(--line);color:var(--ink);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+  .fstep .n::before{content:counter(f)}
+  .fstep .b{font-size:13.6px}
+  .fstep .b b{font-weight:700}
+  .fstep .path{font-family:'IBM Plex Mono';font-size:11.5px;color:var(--ink3);margin-top:2px}
+
+  /* browser mockup */
+  .browser{border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);margin:16px 0;background:var(--surface)}
+  .bbar{display:flex;align-items:center;gap:10px;padding:9px 12px;background:#e9edf2;border-bottom:1px solid var(--line)}
+  .dots{display:flex;gap:6px}.dots i{width:11px;height:11px;border-radius:50%;display:block}.dots i:nth-child(1){background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+  .url{flex:1;background:#fff;border:1px solid var(--line);border-radius:7px;padding:5px 11px;font-family:'IBM Plex Mono';font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:7px}
+  .lock{color:var(--ok)}
+  .appshell{display:grid;grid-template-columns:150px 1fr;height:240px}
+  .sb{background:#fbfcfd;border-right:1px solid var(--line);padding:12px 10px}
+  .sb .brand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:12px;margin-bottom:14px}
+  .sb .brand .m{width:20px;height:20px;border-radius:6px;background:var(--ink)}
+  .sb .grp{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);margin:10px 0 5px;font-weight:700}
+  .sb .nav{font-size:11.5px;color:var(--ink2);padding:5px 8px;border-radius:6px;margin-bottom:2px}
+  .sb .nav.on{background:var(--accent-soft);color:var(--ink);font-weight:600}
+  .mapwrap{position:relative;background:radial-gradient(var(--line) 1px,transparent 1px);background-size:18px 18px;overflow:hidden}
+  .maptop{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--line);font-size:11.5px;font-weight:600}
+  .chip{font-size:10px;color:var(--ink2);background:var(--surface2);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+  .pin{position:absolute;width:13px;height:13px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .cone{position:absolute;width:0;height:0;border-left:26px solid transparent;border-right:26px solid transparent}
+
+  footer{color:var(--ink3);font-size:12.5px;text-align:center;padding:30px 0 10px}
+  .kbd{font-family:'IBM Plex Mono';font-size:11.5px;background:#fff;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="logo">
+      <span class="mark"><svg width="18" height="18" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2" fill="#111"/><circle cx="8" cy="8" r="4.6" fill="none" stroke="#111" stroke-opacity=".55" stroke-width="1.3"/><circle cx="8" cy="8" r="7" fill="none" stroke="#111" stroke-opacity=".25" stroke-width="1.2"/></svg></span>
+      <span class="name">Ops Monitor</span>
+    </div>
+    <div class="badge-row">
+      <span class="pill"><span class="dot"></span>Production Deployment Guide</span>
+      <span class="pill">Ubuntu&nbsp;24.04&nbsp;LTS</span>
+      <span class="pill">Docker&nbsp;Compose</span>
+      <span class="pill">Nginx&nbsp;+&nbsp;TLS</span>
+      <span class="pill">Bun&nbsp;·&nbsp;Hono&nbsp;·&nbsp;Postgres</span>
+    </div>
+    <h1>Deploy the Ops Monitoring Dashboard<br>on a single Ubuntu VPS</h1>
+    <p>A self-contained, repeatable deployment: Nginx terminates HTTPS and serves the React SPA, proxies the API & uploads to the Bun/Hono backend, and Postgres runs alongside — all in Docker Compose, behind a Let's Encrypt certificate.</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- TOC -->
+  <nav class="toc" id="toc">
+    <h4>On this page</h4>
+    <a href="#glance">At a glance</a>
+    <a href="#arch">Architecture</a>
+    <a href="#flow">Request data flow</a>
+    <a href="#mockup">What you'll see</a>
+    <a href="#layout">Files we add</a>
+    <a href="#s1" class="sub">1 · Prerequisites</a>
+    <a href="#s2" class="sub">2 · Harden the VPS</a>
+    <a href="#s3" class="sub">3 · Get the code</a>
+    <a href="#s4" class="sub">4 · Dockerfiles</a>
+    <a href="#s5" class="sub">5 · Nginx config</a>
+    <a href="#s6" class="sub">6 · Compose + .env</a>
+    <a href="#s7" class="sub">7 · Build & start</a>
+    <a href="#s8" class="sub">8 · DB push & seed</a>
+    <a href="#s9" class="sub">9 · Enable HTTPS</a>
+    <a href="#s10" class="sub">10 · Verify</a>
+    <a href="#ops">Operations</a>
+    <a href="#redeploy" class="sub">Redeploy</a>
+    <a href="#backup" class="sub">Backups</a>
+    <a href="#security">Security checklist</a>
+    <a href="#trouble">Troubleshooting</a>
+  </nav>
+
+  <main>
+
+  <!-- AT A GLANCE -->
+  <section id="glance">
+    <h2>At a glance</h2>
+    <p class="lead">Everything runs as three containers on one box. Only ports <code class="inline">80</code> and <code class="inline">443</code> face the internet.</p>
+    <div class="cards">
+      <div class="card"><div class="k">Containers</div><div class="v">nginx · backend · db</div></div>
+      <div class="card"><div class="k">Backend</div><div class="v">Bun + Hono <small>:3000 (internal)</small></div></div>
+      <div class="card"><div class="k">Frontend</div><div class="v">Vite SPA <small>static, served by nginx</small></div></div>
+      <div class="card"><div class="k">Database</div><div class="v">Postgres 17 <small>:5432 (internal)</small></div></div>
+      <div class="card"><div class="k">TLS</div><div class="v">Let's Encrypt <small>auto-renew</small></div></div>
+      <div class="card"><div class="k">Persistent data</div><div class="v">pgdata · uploads · certs</div></div>
+      <div class="card"><div class="k">Min VPS</div><div class="v">2 vCPU · 2 GB RAM <small>· 20 GB SSD</small></div></div>
+      <div class="card"><div class="k">Setup time</div><div class="v">~30–45 min</div></div>
+    </div>
+    <div class="note"><b>App-specific facts baked into this guide:</b> the backend listens on <code class="inline">PORT</code> (default <code class="inline">3000</code>), exposes <code class="inline">/api/*</code> and serves uploaded floor-plans from <code class="inline">/uploads/*</code> (written to <code class="inline">backend/uploads</code>). Floor-plan images can be up to <b>10 MB</b>, so Nginx needs <code class="inline">client_max_body_size</code> ≥ that. The SPA calls the API <b>same-origin</b> (relative <code class="inline">/api</code>), so no CORS or build-time API URL is required.</div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="arch">
+    <h2>Architecture</h2>
+    <p class="lead">One VPS, one Docker network, three services, three named volumes.</p>
+    <div class="diagram">
+      <div class="stack">
+        <div class="box" style="width:min(420px,100%);text-align:center">
+          <div class="t" style="justify-content:center"><span class="ico i-web">🌐</span> Internet — admins &amp; viewers</div>
+          <div class="d">Browsers (desktop / iPad) over HTTPS</div>
+        </div>
+        <div class="arrow">│ &nbsp; HTTPS&nbsp;:443 &nbsp; (HTTP&nbsp;:80 → redirect)</div>
+        <div class="arrow">▼</div>
+      </div>
+
+      <div class="vps">
+        <span class="label">UBUNTU 24.04 VPS — Docker Engine</span>
+        <div class="net">
+          <span class="label">docker network: opsnet (bridge)</span>
+          <div class="row3">
+            <div class="box">
+              <div class="t"><span class="ico i-nginx">N</span> nginx</div>
+              <div class="d">Reverse proxy + static SPA + TLS termination + gzip</div>
+              <div class="port">exposes 80, 443 → host</div>
+            </div>
+            <div class="box">
+              <div class="t"><span class="ico i-bun">B</span> backend</div>
+              <div class="d">Bun + Hono API · JWT auth · Drizzle ORM</div>
+              <div class="port">:3000 — internal only</div>
+            </div>
+            <div class="box">
+              <div class="t"><span class="ico i-pg">P</span> db</div>
+              <div class="d">Postgres 17 · database <span class="mono">opsmonitor</span></div>
+              <div class="port">:5432 — internal only</div>
+            </div>
+          </div>
+          <div class="arrow" style="text-align:center;margin-top:8px">nginx → backend (proxy /api, /uploads) &nbsp;·&nbsp; backend → db (SQL)</div>
+          <div class="vols">
+            <span class="vchip"><span class="ico i-vol" style="width:16px;height:16px;font-size:9px">V</span> <b>pgdata</b> → /var/lib/postgresql/data</span>
+            <span class="vchip"><span class="ico i-vol" style="width:16px;height:16px;font-size:9px">V</span> <b>uploads</b> → backend /app/uploads</span>
+            <span class="vchip"><span class="ico i-vol" style="width:16px;height:16px;font-size:9px">V</span> <b>letsencrypt</b> → nginx certs</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="small">Postgres and the backend are never published to the host — they're reachable only by service name (<code class="inline">db</code>, <code class="inline">backend</code>) inside <code class="inline">opsnet</code>. The attack surface is just Nginx on 80/443.</p>
+  </section>
+
+  <!-- DATA FLOW -->
+  <section id="flow">
+    <h2>Request data flow</h2>
+    <p class="lead">A signed-in admin loading the Workstation Map and dragging a pin:</p>
+    <div class="flow">
+      <div class="fstep"><div class="n"></div><div class="b"><b>Browser → Nginx (443).</b> TLS handshake; request for <span class="mono">/</span>. <div class="path">GET https://ops.example.com/</div></div></div>
+      <div class="fstep"><div class="n"></div><div class="b"><b>Nginx serves the SPA.</b> <span class="mono">try_files $uri /index.html</span> returns the hashed JS/CSS bundle from disk — no backend hit. <div class="path">root /usr/share/nginx/html</div></div></div>
+      <div class="fstep"><div class="n"></div><div class="b"><b>SPA authenticates.</b> The React app posts credentials; Nginx proxies to the backend, which checks the bcrypt hash and returns a <b>JWT</b> (HS256, 24 h). The token is kept in <span class="mono">localStorage</span>. <div class="path">POST /api/auth/login → backend:3000</div></div></div>
+      <div class="fstep"><div class="n"></div><div class="b"><b>Authorized reads.</b> Every later call sends <span class="mono">Authorization: Bearer …</span>. The backend resolves the user's effective per-property role (Drizzle → Postgres) and returns floors + device pins. <div class="path">GET /api/floors?hotelId=rh2 → db</div></div></div>
+      <div class="fstep"><div class="n"></div><div class="b"><b>Floor-plan images.</b> Pin maps load background plans straight from the backend's static uploads dir (persisted on the <span class="mono">uploads</span> volume). <div class="path">GET /uploads/flr-*.png → backend serveStatic</div></div></div>
+      <div class="fstep"><div class="n"></div><div class="b"><b>Drag a pin → persist.</b> Repositioning issues an optimistic PATCH with the new % coordinates; a 403 comes back instead if the user lacks <span class="mono">floors:crud</span>. <div class="path">PATCH /api/devices/:id { x, y } → db</div></div></div>
+    </div>
+    <div class="tip"><b>Why same-origin matters:</b> because Nginx serves the SPA <i>and</i> proxies <code class="inline">/api</code> under the same hostname, the browser never makes a cross-origin request — no CORS preflight, no third-party cookies, and the JWT is simply attached as a header by the app's fetch client.</div>
+  </section>
+
+  <!-- MOCKUP -->
+  <section id="mockup">
+    <h2>What you'll see once it's live</h2>
+    <p class="lead">The same app you run locally, now at your domain over HTTPS:</p>
+    <div class="browser">
+      <div class="bbar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="url"><span class="lock">🔒</span> https://ops.example.com/workstation?floor=account</div>
+      </div>
+      <div class="appshell">
+        <div class="sb">
+          <div class="brand"><span class="m"></span> Ops Monitor</div>
+          <div class="grp">Floor</div>
+          <div class="nav on">Account · 3F</div>
+          <div class="nav">Office · 2F</div>
+          <div class="grp">Equipment</div>
+          <div class="nav">Workstations</div>
+          <div class="nav">CCTV cameras</div>
+          <div class="nav">Wi-Fi APs</div>
+          <div class="grp">Admin</div>
+          <div class="nav">Access control</div>
+        </div>
+        <div class="mapwrap">
+          <div class="maptop">Workstation map <span class="chip">Updated just now · Auto-refresh in 52s</span></div>
+          <!-- decorative pins -->
+          <span class="pin" style="left:28%;top:46%;background:#17a05e"></span>
+          <span class="pin" style="left:52%;top:38%;background:#e0851f"></span>
+          <span class="pin" style="left:64%;top:64%;background:#17a05e"></span>
+          <span class="pin" style="left:40%;top:70%;background:#c2a008"></span>
+          <span class="cone" style="left:46%;top:48%;border-bottom:30px solid rgba(37,99,235,.14);transform:rotate(25deg)"></span>
+          <span class="pin" style="left:48%;top:52%;background:#2563eb"></span>
+        </div>
+      </div>
+    </div>
+    <p class="small">Status pins keep their colors (online / paused / no-data / recording) over the neutral UI; the camera cone shows view direction.</p>
+  </section>
+
+  <!-- LAYOUT -->
+  <section id="layout">
+    <h2>Files we add to the repo</h2>
+    <p class="lead">Six new deployment files alongside the existing <code class="inline">backend/</code> and <code class="inline">frontend/</code>:</p>
+    <div class="code-card"><div class="code-head"><span class="fn">project tree</span><span class="copy">Copy</span></div><pre>hotel-asset/
+├─ backend/
+│  ├─ src/ …                 <span class="c"># Bun + Hono API (unchanged)</span>
+│  └─ <b>Dockerfile</b>             <span class="c"># NEW — builds the API image</span>
+├─ frontend/
+│  ├─ src/ …                 <span class="c"># Vite SPA (unchanged)</span>
+│  └─ <b>Dockerfile</b>             <span class="c"># NEW — builds SPA, bakes into nginx</span>
+├─ nginx/
+│  └─ conf.d/
+│     └─ <b>default.conf</b>        <span class="c"># NEW — proxy + SPA + TLS + gzip</span>
+├─ <b>docker-compose.yml</b>        <span class="c"># NEW — the 3 services + volumes</span>
+├─ <b>.dockerignore</b>            <span class="c"># NEW — keep images small</span>
+├─ <b>.env.deploy.example</b>      <span class="c"># NEW — secrets template (commit this)</span>
+└─ <b>deploy/</b>
+   ├─ redeploy.sh            <span class="c"># NEW — pull + rebuild + migrate</span>
+   └─ backup.sh             <span class="c"># NEW — pg_dump + uploads tarball</span></pre></div>
+    <div class="warn"><b>Never commit the real <code class="inline">.env</code></b> (it holds the DB password &amp; JWT secret). Commit only <code class="inline">.env.deploy.example</code>. Add <code class="inline">.env</code> to <code class="inline">.gitignore</code> (this repo already ignores <code class="inline">.env</code>).</div>
+  </section>
+
+  <!-- STEP 1 -->
+  <section id="s1">
+    <h2><span class="stepnum">1</span> Prerequisites</h2>
+    <ul>
+      <li>A <b>VPS</b> running Ubuntu 24.04 (DigitalOcean / Hetzner / Vultr / Linode …), 2 GB RAM+.</li>
+      <li>A <b>domain</b> with a DNS <b>A record</b> pointing to the VPS public IP — e.g. <code class="inline">ops.example.com → 203.0.113.10</code>. (TLS issuance needs this resolving first.)</li>
+      <li><b>SSH access</b> as <code class="inline">root</code> or a sudo user, ideally with a key (not a password).</li>
+      <li>The app's <b>seed credentials</b> for first login: <code class="inline">chai@richmond.local / admin123</code> (admin). Change these after first sign-in.</li>
+    </ul>
+  </section>
+
+  <!-- STEP 2 -->
+  <section id="s2">
+    <h2><span class="stepnum">2</span> Harden the VPS &amp; install Docker</h2>
+    <p class="lead">Run as root on the fresh server. Creates a non-root deploy user, a firewall, and installs Docker Engine + the Compose plugin.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">bootstrap.sh — run once on the VPS (root)</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># --- system updates ---</span>
+apt update <span class="k">&amp;&amp;</span> apt -y upgrade
+
+<span class="c"># --- a non-root user that can run docker ---</span>
+adduser --disabled-password --gecos "" deploy
+usermod -aG sudo deploy
+<span class="c"># copy your SSH key to the new user so you can log in as 'deploy'</span>
+rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy
+
+<span class="c"># --- firewall: only SSH + web ---</span>
+apt -y install ufw
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw --force enable
+
+<span class="c"># --- Docker Engine + Compose plugin (official convenience script) ---</span>
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker deploy
+
+<span class="c"># --- (optional) basic brute-force protection ---</span>
+apt -y install fail2ban
+systemctl enable --now fail2ban
+
+echo "Done. Log back in as:  ssh deploy@YOUR_SERVER_IP"</pre></div>
+    <div class="note">From here on, work as the <code class="inline">deploy</code> user. Confirm Docker works without sudo: <code class="inline">docker run --rm hello-world</code> and <code class="inline">docker compose version</code>.</div>
+  </section>
+
+  <!-- STEP 3 -->
+  <section id="s3">
+    <h2><span class="stepnum">3</span> Get the code onto the server</h2>
+    <div class="code-card"><div class="code-head"><span class="fn">as deploy@vps</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>cd ~
+git clone https://github.com/575051410455/-hotel-asset.git ops
+cd ops</pre></div>
+    <p>The next four steps add the deployment files. Create them in this directory (they're listed in full below). The <code class="inline">.dockerignore</code> keeps build contexts lean and fast:</p>
+    <div class="code-card"><div class="code-head"><span class="fn">.dockerignore</span><span class="copy">Copy</span></div><pre>**/node_modules
+**/dist
+**/.next
+backend/uploads
+_extracted
+_design-new
+_smoke
+.git
+*.zip
+.env
+**/*.log</pre></div>
+  </section>
+
+  <!-- STEP 4 -->
+  <section id="s4">
+    <h2><span class="stepnum">4</span> Dockerfiles</h2>
+    <h3>Backend — Bun + Hono API</h3>
+    <p>A thin Bun image. <code class="inline">bun install</code> also pulls <span class="mono">drizzle-kit</span> so we can push the schema from inside the container later.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">backend/Dockerfile</span><span class="lang">dockerfile</span><span class="copy">Copy</span></div><pre>FROM oven/bun:1-alpine
+WORKDIR /app
+
+<span class="c"># install deps first (better layer caching)</span>
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+<span class="c"># app source</span>
+COPY . .
+
+<span class="c"># uploaded floor-plans are written here; mounted to a volume in compose</span>
+RUN mkdir -p uploads
+ENV NODE_ENV=production
+ENV PORT=3000
+EXPOSE 3000
+
+CMD [<span class="s">"bun"</span>, <span class="s">"src/index.ts"</span>]</pre></div>
+
+    <h3>Frontend — build the SPA, serve via Nginx</h3>
+    <p>Two stages: build the static bundle with Bun, then copy <code class="inline">dist/</code> into an Nginx image. We run <span class="mono">vite build</span> directly (the <span class="mono">tsc</span> type-check is a CI gate, not needed to produce the bundle — and the app's <code class="inline">@backend</code> imports are <i>type-only</i>, so the backend isn't needed at build time).</p>
+    <div class="code-card"><div class="code-head"><span class="fn">frontend/Dockerfile</span><span class="lang">dockerfile</span><span class="copy">Copy</span></div><pre><span class="c"># ---------- stage 1: build the SPA ----------</span>
+FROM oven/bun:1-alpine AS build
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY . .
+<span class="c"># production bundle → /app/dist  (relative /api calls, so no API URL needed)</span>
+RUN bunx vite build
+
+<span class="c"># ---------- stage 2: serve static files ----------</span>
+FROM nginx:1.27-alpine
+<span class="c"># our server block lives in nginx/conf.d (bind-mounted by compose),</span>
+<span class="c"># so we only ship the built assets here</span>
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80 443</pre></div>
+    <div class="note"><b>Monorepo note:</b> the build context is <code class="inline">frontend/</code>. If you prefer to also run the full <code class="inline">bun run build</code> (with <span class="mono">tsc -b</span>) inside Docker, set the context to the repo root and copy <code class="inline">backend/</code> too, so the <code class="inline">@backend/*</code> path alias resolves. The <span class="mono">vite build</span> shown above avoids that entirely.</div>
+  </section>
+
+  <!-- STEP 5 -->
+  <section id="s5">
+    <h2><span class="stepnum">5</span> Nginx — proxy, SPA fallback, TLS</h2>
+    <p class="lead">Edit the two <code class="inline">server_name</code> lines to your domain. Start with HTTPS commented out, enable it in step 9 once certs exist.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">nginx/conf.d/default.conf</span><span class="lang">nginx</span><span class="copy">Copy</span></div><pre><span class="c"># ---- HTTP :80 — ACME challenge + redirect to HTTPS ----</span>
+server {
+    listen 80;
+    server_name ops.example.com;
+
+    <span class="c"># Let's Encrypt webroot challenge</span>
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    <span class="c"># everything else → HTTPS (enable after step 9)</span>
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+<span class="c"># ---- HTTPS :443 — the app ----</span>
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ops.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/ops.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ops.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    <span class="c"># floor-plan uploads can be up to 10 MB</span>
+    client_max_body_size 12m;
+
+    <span class="c"># compress text assets</span>
+    gzip on;
+    gzip_comp_level 5;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    <span class="c"># security headers</span>
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    <span class="c"># --- API → backend container ---</span>
+    location /api/ {
+        proxy_pass http://backend:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
+    <span class="c"># --- uploaded floor-plan images → backend static ---</span>
+    location /uploads/ {
+        proxy_pass http://backend:3000;
+        proxy_set_header Host $host;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    <span class="c"># --- the React SPA (client-side routing) ---</span>
+    root /usr/share/nginx/html;
+    index index.html;
+
+    <span class="c"># hashed assets — cache hard</span>
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    <span class="c"># app shell — never cache, always fall back to index.html</span>
+    location / {
+        try_files $uri /index.html;
+    }
+}</pre></div>
+    <div class="tip"><b>Serving uploads directly (optional, faster):</b> mount the <code class="inline">uploads</code> volume into nginx (read-only) and replace the <code class="inline">/uploads/</code> block with <code class="inline">root</code> + <code class="inline">try_files</code> so Nginx serves the images without touching the backend. The proxy version above is simpler and works out of the box.</div>
+  </section>
+
+  <!-- STEP 6 -->
+  <section id="s6">
+    <h2><span class="stepnum">6</span> Compose file + secrets</h2>
+    <p class="lead">Three services, three volumes, one network. <code class="inline">restart: unless-stopped</code> keeps everything up across reboots.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">docker-compose.yml</span><span class="lang">yaml</span><span class="copy">Copy</span></div><pre>name: ops-monitor
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: opsmonitor
+      POSTGRES_USER: opsmonitor
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [opsnet]
+    healthcheck:
+      test: [<span class="s">"CMD-SHELL"</span>, <span class="s">"pg_isready -U opsmonitor -d opsmonitor"</span>]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://opsmonitor:${DB_PASSWORD}@db:5432/opsmonitor
+      JWT_SECRET:   ${JWT_SECRET}
+      PORT:         <span class="s">"3000"</span>
+      FRONTEND_URL: https://${DOMAIN}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [opsnet]
+
+  nginx:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - <span class="s">"80:80"</span>
+      - <span class="s">"443:443"</span>
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    depends_on: [backend]
+    networks: [opsnet]
+
+volumes:
+  pgdata:
+  uploads:
+  letsencrypt:
+  certbot-www:
+
+networks:
+  opsnet:</pre></div>
+
+    <h3>Secrets — generate strong values</h3>
+    <p>Compose auto-reads a file named <code class="inline">.env</code> next to the compose file. Generate the secrets, don't reuse the dev ones:</p>
+    <div class="code-card"><div class="code-head"><span class="fn">create the real .env (never commit)</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>cat &gt; .env &lt;&lt;EOF
+DOMAIN=ops.example.com
+DB_PASSWORD=$(openssl rand -base64 24 | tr -d /+=)
+JWT_SECRET=$(openssl rand -base64 48 | tr -d /+=)
+EOF
+chmod 600 .env
+cat .env   <span class="c"># note these down somewhere safe</span></pre></div>
+    <div class="code-card"><div class="code-head"><span class="fn">.env.deploy.example — commit this template</span><span class="copy">Copy</span></div><pre>DOMAIN=ops.example.com
+DB_PASSWORD=change-me-strong
+JWT_SECRET=change-me-very-long-random</pre></div>
+    <div class="warn"><b>Rotating the JWT secret logs everyone out</b> (existing tokens become invalid). That's expected — set it once at first deploy and keep it stable.</div>
+  </section>
+
+  <!-- STEP 7 -->
+  <section id="s7">
+    <h2><span class="stepnum">7</span> Build &amp; start</h2>
+    <p>Bring up <code class="inline">db</code> and <code class="inline">backend</code> first; we'll add Nginx after creating the HTTP-only config so certbot can run.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">as deploy@vps, in ~/ops</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>docker compose build
+docker compose up -d db backend
+docker compose ps          <span class="c"># db should be healthy, backend up</span>
+docker compose logs -f backend   <span class="c"># expect: "ops-monitor backend running on port 3000"</span></pre></div>
+  </section>
+
+  <!-- STEP 8 -->
+  <section id="s8">
+    <h2><span class="stepnum">8</span> Create the schema &amp; seed data</h2>
+    <p class="lead">Postgres already created the empty <span class="mono">opsmonitor</span> database (via <code class="inline">POSTGRES_DB</code>). Now push the Drizzle schema and load the demo data — run these <b>once</b>, inside the backend container.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">one-time DB init</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># create all tables from the Drizzle schema</span>
+docker compose exec backend bun run db:push
+
+<span class="c"># seed hotels, roles, users, floors, devices (demo accounts)</span>
+docker compose exec backend bun run db:seed</pre></div>
+    <div class="warn"><b>Seeding is for first launch / demos only.</b> <code class="inline">db:seed</code> clears and repopulates the tables — never run it against a database that already holds real data. For real use, push the schema, then create your admin via the Access Control screen and skip the seed (or run it once, then change every demo password).</div>
+    <div class="note"><b>Schema changes later?</b> This project uses <code class="inline">drizzle-kit push</code> (declarative). After pulling new code, re-run <code class="inline">db:push</code>. For audited migrations instead, switch to <code class="inline">db:generate</code> + <code class="inline">db:migrate</code>.</div>
+  </section>
+
+  <!-- STEP 9 -->
+  <section id="s9">
+    <h2><span class="stepnum">9</span> Enable HTTPS (Let's Encrypt)</h2>
+    <p class="lead">Start Nginx on port 80 (so the ACME challenge is reachable), obtain a certificate, then it auto-loads on 443.</p>
+    <ol>
+      <li>Make sure your DNS A record already points at the VPS (verify: <code class="inline">dig +short ops.example.com</code>).</li>
+      <li>Start Nginx (the HTTP block serves the challenge; the HTTPS block will fail to load until certs exist — temporarily comment the <code class="inline">listen 443</code> server while issuing, or let it error and proceed):</li>
+    </ol>
+    <div class="code-card"><div class="code-head"><span class="fn">issue the certificate</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>docker compose up -d nginx
+
+<span class="c"># run certbot once, sharing nginx's challenge + cert volumes</span>
+docker run --rm \
+  -v ops-monitor_certbot-www:/var/www/certbot \
+  -v ops-monitor_letsencrypt:/etc/letsencrypt \
+  certbot/certbot certonly --webroot -w /var/www/certbot \
+  -d ops.example.com \
+  --email you@example.com --agree-tos --no-eff-email
+
+<span class="c"># reload nginx to pick up the new certificate</span>
+docker compose exec nginx nginx -s reload</pre></div>
+    <p>Add an auto-renewal: certbot certs last 90 days. A tiny cron entry on the host renews and reloads Nginx:</p>
+    <div class="code-card"><div class="code-head"><span class="fn">crontab -e (deploy user)</span><span class="lang">cron</span><span class="copy">Copy</span></div><pre><span class="c"># 03:30 daily — renew if due, then reload nginx</span>
+30 3 * * * docker run --rm -v ops-monitor_certbot-www:/var/www/certbot -v ops-monitor_letsencrypt:/etc/letsencrypt certbot/certbot renew --webroot -w /var/www/certbot --quiet &amp;&amp; docker compose -f /home/deploy/ops/docker-compose.yml exec -T nginx nginx -s reload</pre></div>
+    <div class="note">Volume names are prefixed with the compose project name (<code class="inline">name: ops-monitor</code>) → <code class="inline">ops-monitor_letsencrypt</code>, etc. Check yours with <code class="inline">docker volume ls</code>.</div>
+  </section>
+
+  <!-- STEP 10 -->
+  <section id="s10">
+    <h2><span class="stepnum">10</span> Verify</h2>
+    <table>
+      <tr><th>Check</th><th>Command / action</th><th>Expect</th></tr>
+      <tr><td>All up</td><td><code>docker compose ps</code></td><td>db healthy · backend up · nginx up</td></tr>
+      <tr><td>API health</td><td><code>curl -s https://ops.example.com/api/health</code></td><td><code>{"status":"ok",…}</code></td></tr>
+      <tr><td>TLS valid</td><td>Open the site in a browser</td><td>🔒 padlock, no warning</td></tr>
+      <tr><td>SPA routing</td><td>Visit <code>/workstation</code> directly, refresh</td><td>App loads (no 404)</td></tr>
+      <tr><td>Login</td><td><code>chai@richmond.local / admin123</code></td><td>Dashboard loads</td></tr>
+      <tr><td>Uploads</td><td>Add a floor with a plan image</td><td>Image renders from <code>/uploads/…</code></td></tr>
+    </table>
+    <div class="tip">First thing after a successful login on a real deployment: open <b>Access Control</b> and <b>Profile</b>, change the seeded passwords (or delete the demo users), and create your own admin.</div>
+  </section>
+
+  <!-- OPS -->
+  <section id="ops">
+    <h2>Day-2 operations</h2>
+    <table>
+      <tr><th>Task</th><th>Command</th></tr>
+      <tr><td>Tail logs</td><td><code>docker compose logs -f backend</code></td></tr>
+      <tr><td>Restart one service</td><td><code>docker compose restart backend</code></td></tr>
+      <tr><td>Stop everything</td><td><code>docker compose down</code> <span class="small">(keeps volumes)</span></td></tr>
+      <tr><td>Open a DB shell</td><td><code>docker compose exec db psql -U opsmonitor opsmonitor</code></td></tr>
+      <tr><td>Disk / resource use</td><td><code>docker stats</code> · <code>docker system df</code></td></tr>
+      <tr><td>Prune old images</td><td><code>docker image prune -f</code></td></tr>
+    </table>
+
+    <h3 id="redeploy">Redeploy after a code change</h3>
+    <div class="code-card"><div class="code-head"><span class="fn">deploy/redeploy.sh</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "→ pulling latest code"
+git pull --ff-only
+
+echo "→ rebuilding images"
+docker compose build
+
+echo "→ restarting services"
+docker compose up -d
+
+echo "→ applying any schema changes"
+docker compose exec -T backend bun run db:push
+
+echo "✓ redeploy complete"
+docker compose ps</pre></div>
+    <p class="small">Make it executable: <code class="inline">chmod +x deploy/redeploy.sh</code> — then redeploy with <code class="inline">./deploy/redeploy.sh</code>. (Nginx rebuilds the SPA in its image, so the new frontend ships automatically.)</p>
+
+    <h3 id="backup">Backups — database + uploads</h3>
+    <p>The only stateful data is Postgres and the uploaded floor-plans. Back up both:</p>
+    <div class="code-card"><div class="code-head"><span class="fn">deploy/backup.sh</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+STAMP=$(date +%Y%m%d-%H%M%S)
+OUT=$HOME/backups
+mkdir -p "$OUT"
+
+echo "→ dumping database"
+docker compose exec -T db pg_dump -U opsmonitor opsmonitor | gzip &gt; "$OUT/db-$STAMP.sql.gz"
+
+echo "→ archiving uploads volume"
+docker run --rm -v ops-monitor_uploads:/data -v "$OUT":/backup alpine \
+  tar czf "/backup/uploads-$STAMP.tar.gz" -C /data .
+
+<span class="c"># keep the 14 most recent of each</span>
+ls -1t "$OUT"/db-*.sql.gz      | tail -n +15 | xargs -r rm
+ls -1t "$OUT"/uploads-*.tar.gz | tail -n +15 | xargs -r rm
+echo "✓ backup written to $OUT"</pre></div>
+    <div class="code-card"><div class="code-head"><span class="fn">crontab — nightly backup at 02:00</span><span class="lang">cron</span><span class="copy">Copy</span></div><pre>0 2 * * * /home/deploy/ops/deploy/backup.sh &gt;&gt; /home/deploy/backup.log 2&gt;&amp;1</pre></div>
+    <div class="tip"><b>Restore a DB dump:</b> <code class="inline">gunzip -c db-XXXX.sql.gz | docker compose exec -T db psql -U opsmonitor opsmonitor</code>. Ship the backups off-box (rsync / S3) for real durability.</div>
+  </section>
+
+  <!-- SECURITY -->
+  <section id="security">
+    <h2>Security checklist</h2>
+    <ul>
+      <li>✅ Firewall (<code class="inline">ufw</code>) allows only <b>22, 80, 443</b> — Postgres &amp; the API are never published.</li>
+      <li>✅ SSH key auth; disable password &amp; root login in <code class="inline">/etc/ssh/sshd_config</code> (<code class="inline">PasswordAuthentication no</code>, <code class="inline">PermitRootLogin no</code>).</li>
+      <li>✅ Strong, generated <code class="inline">DB_PASSWORD</code> and <code class="inline">JWT_SECRET</code> in <code class="inline">.env</code> (mode 600, never committed).</li>
+      <li>✅ HTTPS enforced (HTTP → 301), modern TLS only, security headers set.</li>
+      <li>✅ <code class="inline">client_max_body_size</code> caps uploads; the backend also validates type (PNG/JPG) &amp; the 10 MB limit.</li>
+      <li>✅ Change/delete all seeded demo accounts after first login.</li>
+      <li>🔁 Keep the host patched (<code class="inline">unattended-upgrades</code>) and rebuild images periodically for base-image CVEs.</li>
+      <li>🔁 Verify backups restore — a backup you've never restored isn't a backup.</li>
+    </ul>
+    <div class="note"><b>Note on EXIF:</b> uploaded images are stored as-is (the app doesn't strip metadata). If plans may carry sensitive EXIF, add a processing step (e.g. <span class="mono">sharp</span>) before going wide.</div>
+  </section>
+
+  <!-- TROUBLESHOOTING -->
+  <section id="trouble">
+    <h2>Troubleshooting</h2>
+    <table>
+      <tr><th>Symptom</th><th>Likely cause &amp; fix</th></tr>
+      <tr><td>502 Bad Gateway on <code>/api</code></td><td>Backend down or DB not ready. <code>docker compose logs backend</code>; confirm <code>db</code> is <i>healthy</i> and <code>DATABASE_URL</code> host is <code>db</code>.</td></tr>
+      <tr><td>SPA loads but API 404 / wrong host</td><td>Nginx <code>location /api/</code> missing trailing slash or wrong upstream name. Must be <code>proxy_pass http://backend:3000;</code>.</td></tr>
+      <tr><td>Refreshing a route → 404</td><td>SPA fallback missing. Ensure <code>try_files $uri /index.html;</code> in <code>location /</code>.</td></tr>
+      <tr><td>Cert issuance fails</td><td>DNS A record not propagated, or port 80 blocked. <code>dig +short DOMAIN</code>; check <code>ufw</code>; ensure the HTTP server block serves <code>/.well-known/acme-challenge/</code>.</td></tr>
+      <tr><td>413 Request Entity Too Large</td><td>Upload &gt; <code>client_max_body_size</code>. Raise it (≥ 12m) and <code>nginx -s reload</code>.</td></tr>
+      <tr><td>Everyone logged out after deploy</td><td><code>JWT_SECRET</code> changed. Keep it stable across deploys.</td></tr>
+      <tr><td>Uploaded images 404 after restart</td><td>The <code>uploads</code> volume isn't mounted at <code>/app/uploads</code>, or you recreated the volume. Check the compose <code>volumes:</code>.</td></tr>
+    </table>
+  </section>
+
+  <footer>
+    Ops Monitor — Docker Compose + Nginx deployment guide · Ubuntu 24.04 LTS<br>
+    Generated for the <span class="mono">hotel-asset</span> repository · keep this file in <span class="mono">docs/</span>.
+  </footer>
+
+  </main>
+</div>
+
+<script>
+  // copy buttons
+  document.querySelectorAll('.code-card').forEach(card => {
+    const btn = card.querySelector('.copy');
+    const pre = card.querySelector('pre');
+    if (!btn || !pre) return;
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(pre.innerText);
+        const t = btn.textContent; btn.textContent = 'Copied ✓';
+        setTimeout(() => (btn.textContent = t), 1400);
+      } catch { btn.textContent = 'Press ⌘/Ctrl+C'; }
+    });
+  });
+  // TOC scroll-spy
+  const links = [...document.querySelectorAll('#toc a')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = map.get(e.target.id); if (a) a.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px', threshold: 0 });
+  document.querySelectorAll('section[id]').forEach(s => obs.observe(s));
+</script>
+</body>
+</html>

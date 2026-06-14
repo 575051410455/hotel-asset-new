@@ -1,0 +1,68 @@
+name: ops-monitor
+
+# Ops Monitoring Dashboard — full stack in Docker Compose.
+# Services:  nginx (edge) · frontend (SPA) · backend (API) · db (Postgres)
+# Only nginx is published to the host (port 80; add 443 for TLS).
+# Secrets come from a .env file next to this one — see .env.example.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opsmonitor}
+      POSTGRES_USER: ${POSTGRES_USER:-opsmonitor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [opsnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opsmonitor} -d ${POSTGRES_DB:-opsmonitor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-opsmonitor}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opsmonitor}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      PORT: "3000"
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+    volumes:
+      - uploads:/app/uploads      # persists uploaded floor-plan images
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [opsnet]
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    networks: [opsnet]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # - "443:443"                       # enable for HTTPS (see docs/deployment.html)
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # - letsencrypt:/etc/letsencrypt    # uncomment for TLS certs
+      # - certbot-www:/var/www/certbot    # uncomment for ACME challenge
+    depends_on: [frontend, backend]
+    networks: [opsnet]
+
+volumes:
+  pgdata:
+  uploads:
+  # letsencrypt:
+  # certbot-www:
+
+networks:
+  opsnet:
