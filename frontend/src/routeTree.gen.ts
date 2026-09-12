@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as LayoutWorkstationRouteImport } from './routes/_layout/workstation'
 import { Route as LayoutStickersRouteImport } from './routes/_layout/stickers'
 import { Route as LayoutProfileRouteImport } from './routes/_layout/profile'
+import { Route as LayoutFloorsRouteImport } from './routes/_layout/floors'
 import { Route as LayoutDashboardRouteImport } from './routes/_layout/dashboard'
 import { Route as LayoutCctvRouteImport } from './routes/_layout/cctv'
 import { Route as LayoutAccessRouteImport } from './routes/_layout/access'
@@ -48,6 +49,11 @@ const LayoutProfileRoute = LayoutProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutFloorsRoute = LayoutFloorsRouteImport.update({
+  id: '/floors',
+  path: '/floors',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutDashboardRoute = LayoutDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -70,6 +76,7 @@ export interface FileRoutesByFullPath {
   '/access': typeof LayoutAccessRoute
   '/cctv': typeof LayoutCctvRoute
   '/dashboard': typeof LayoutDashboardRoute
+  '/floors': typeof LayoutFloorsRoute
   '/profile': typeof LayoutProfileRoute
   '/stickers': typeof LayoutStickersRoute
   '/workstation': typeof LayoutWorkstationRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/access': typeof LayoutAccessRoute
   '/cctv': typeof LayoutCctvRoute
   '/dashboard': typeof LayoutDashboardRoute
+  '/floors': typeof LayoutFloorsRoute
   '/profile': typeof LayoutProfileRoute
   '/stickers': typeof LayoutStickersRoute
   '/workstation': typeof LayoutWorkstationRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/_layout/access': typeof LayoutAccessRoute
   '/_layout/cctv': typeof LayoutCctvRoute
   '/_layout/dashboard': typeof LayoutDashboardRoute
+  '/_layout/floors': typeof LayoutFloorsRoute
   '/_layout/profile': typeof LayoutProfileRoute
   '/_layout/stickers': typeof LayoutStickersRoute
   '/_layout/workstation': typeof LayoutWorkstationRoute
@@ -104,6 +113,7 @@ export interface FileRouteTypes {
     | '/access'
     | '/cctv'
     | '/dashboard'
+    | '/floors'
     | '/profile'
     | '/stickers'
     | '/workstation'
@@ -114,6 +124,7 @@ export interface FileRouteTypes {
     | '/access'
     | '/cctv'
     | '/dashboard'
+    | '/floors'
     | '/profile'
     | '/stickers'
     | '/workstation'
@@ -125,6 +136,7 @@ export interface FileRouteTypes {
     | '/_layout/access'
     | '/_layout/cctv'
     | '/_layout/dashboard'
+    | '/_layout/floors'
     | '/_layout/profile'
     | '/_layout/stickers'
     | '/_layout/workstation'
@@ -180,6 +192,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutProfileRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/floors': {
+      id: '/_layout/floors'
+      path: '/floors'
+      fullPath: '/floors'
+      preLoaderRoute: typeof LayoutFloorsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/dashboard': {
       id: '/_layout/dashboard'
       path: '/dashboard'
@@ -208,6 +227,7 @@ interface LayoutRouteChildren {
   LayoutAccessRoute: typeof LayoutAccessRoute
   LayoutCctvRoute: typeof LayoutCctvRoute
   LayoutDashboardRoute: typeof LayoutDashboardRoute
+  LayoutFloorsRoute: typeof LayoutFloorsRoute
   LayoutProfileRoute: typeof LayoutProfileRoute
   LayoutStickersRoute: typeof LayoutStickersRoute
   LayoutWorkstationRoute: typeof LayoutWorkstationRoute
@@ -217,6 +237,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAccessRoute: LayoutAccessRoute,
   LayoutCctvRoute: LayoutCctvRoute,
   LayoutDashboardRoute: LayoutDashboardRoute,
+  LayoutFloorsRoute: LayoutFloorsRoute,
   LayoutProfileRoute: LayoutProfileRoute,
   LayoutStickersRoute: LayoutStickersRoute,
   LayoutWorkstationRoute: LayoutWorkstationRoute,

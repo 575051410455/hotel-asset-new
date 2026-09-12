@@ -20,11 +20,15 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { useCreateFloor, uploadFloorImage, type UploadedImage } from '@/lib/devices';
+import { useCreateFloor, useUpdateFloor, uploadFloorImage } from '@/lib/devices';
 import { cn } from '@/lib/utils';
-import type { FloorWithPins } from '@/lib/types';
+import type { Floor, FloorWithPins } from '@/lib/types';
 
 type Kind = 'workstation' | 'cctv';
+
+// A plan image is either freshly uploaded (carries width/height) or the floor's
+// existing image (URL + aspect only) when editing.
+type PlanImage = { url: string; aspect: number; width?: number; height?: number };
 
 const inputCls =
   'h-[34px] rounded-lg border border-line bg-bg px-[10px] text-[12.5px] text-ink outline-none focus:border-brand';
@@ -47,15 +51,23 @@ export function FloorDialog({
   onOpenChange,
   hotelId,
   defaultKind,
+  floor = null,
   onCreated,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   hotelId: string | null;
   defaultKind: Kind;
+  /** When set, the dialog edits this floor instead of creating a new one. */
+  floor?: FloorWithPins | null;
   onCreated?: (floor: FloorWithPins) => void;
+  onSaved?: (floor: Floor) => void;
 }) {
   const create = useCreateFloor(hotelId);
+  const update = useUpdateFloor(hotelId);
+  const isEdit = !!floor;
+  const pending = create.isPending || update.isPending;
 
   const [step, setStep] = useState(0);
   const [kind, setKind] = useState<Kind>(defaultKind);
@@ -63,7 +75,7 @@ export function FloorDialog({
   const [short, setShort] = useState('');
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
-  const [image, setImage] = useState<UploadedImage | null>(null);
+  const [image, setImage] = useState<PlanImage | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [departments, setDepartments] = useState<string[]>([]);
@@ -74,22 +86,22 @@ export function FloorDialog({
   const isCctv = kind === 'cctv';
   const deptNoun = isCctv ? 'zone' : 'department';
 
-  // Reset everything each time the dialog opens.
+  // Reset everything each time the dialog opens — prefilled from `floor` when editing.
   useEffect(() => {
     if (!open) return;
     setStep(0);
-    setKind(defaultKind);
-    setName('');
-    setShort('');
-    setSlug('');
+    setKind(floor ? (floor.kind as Kind) : defaultKind);
+    setName(floor?.name ?? '');
+    setShort(floor?.short ?? '');
+    setSlug(floor?.id ?? '');
     setSlugTouched(false);
-    setImage(null);
+    setImage(floor?.image ? { url: floor.image, aspect: floor.aspect } : null);
     setUploading(false);
     setUploadError('');
-    setDepartments([]);
+    setDepartments(floor?.departments ?? []);
     setDeptInput('');
     setError('');
-  }, [open, defaultKind]);
+  }, [open, defaultKind, floor]);
 
   // Auto-derive the slug from the name until the user edits it directly.
   const onName = (v: string) => {
@@ -134,6 +146,36 @@ export function FloorDialog({
 
   const submit = () => {
     setError('');
+    const onError = (e: Error) => {
+      setError(e.message);
+      setStep(0); // a 409 slug clash / validation error lives on step 1
+    };
+
+    // Edit: slug & kind are immutable; PATCH the rest.
+    if (isEdit && floor) {
+      update.mutate(
+        {
+          id: floor.id,
+          patch: {
+            name: name.trim(),
+            short: short.trim(),
+            image: image?.url ?? null,
+            aspect: image?.aspect,
+            departments,
+          },
+        },
+        {
+          onSuccess: (saved: Floor) => {
+            toast.success(`Floor "${saved.short}" saved`);
+            onOpenChange(false);
+            onSaved?.(saved);
+          },
+          onError,
+        }
+      );
+      return;
+    }
+
     create.mutate(
       {
         id: slug,
@@ -146,29 +188,33 @@ export function FloorDialog({
         departments,
       },
       {
-        onSuccess: (floor: FloorWithPins) => {
-          toast.success(`Floor "${floor.short}" created`);
+        onSuccess: (created: FloorWithPins) => {
+          toast.success(`Floor "${created.short}" created`);
           onOpenChange(false);
-          onCreated?.(floor);
+          onCreated?.(created);
         },
-        onError: (e: Error) => {
-          setError(e.message);
-          setStep(0); // a 409 slug clash lives on step 1
-        },
+        onError,
       }
     );
   };
 
   const last = step === STEPS.length - 1;
   const canNext = step === 0 ? step1Valid : step === 1 ? !uploading : true;
+  // Step indicators are clickable: always go back; jump forward only once valid.
+  const canJump = (i: number) => i <= step || (step1Valid && !uploading);
+  const goStep = (i: number) => {
+    if (canJump(i)) setStep(i);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[560px] gap-0">
         <DialogHeader>
-          <DialogTitle className="text-[15.5px]">Add a floor</DialogTitle>
+          <DialogTitle className="text-[15.5px]">{isEdit ? 'Edit floor' : 'Add a floor'}</DialogTitle>
           <DialogDescription className="text-[12px]">
-            Floors are scoped to the current property and power the maps & navigation.
+            {isEdit
+              ? 'Update this floor’s details, plan image and departments.'
+              : 'Floors are scoped to the current property and power the maps & navigation.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -176,26 +222,33 @@ export function FloorDialog({
         <div className="mt-[14px] flex items-center gap-2">
           {STEPS.map((label, i) => (
             <div key={label} className="flex flex-1 items-center gap-2">
-              <span
-                className={cn(
-                  'flex size-[22px] flex-none items-center justify-center rounded-full text-[11px] font-bold',
-                  i < step
-                    ? 'bg-brand text-brand-foreground'
-                    : i === step
-                      ? 'bg-brand-soft text-brand ring-1 ring-brand'
-                      : 'bg-surface2 text-ink3'
-                )}
+              <button
+                type="button"
+                onClick={() => goStep(i)}
+                disabled={!canJump(i)}
+                className="flex items-center gap-2 disabled:cursor-not-allowed"
               >
-                {i < step ? <Check size={12} /> : i + 1}
-              </span>
-              <span
-                className={cn(
-                  'text-[11.5px] font-semibold',
-                  i === step ? 'text-ink' : 'text-ink3'
-                )}
-              >
-                {label}
-              </span>
+                <span
+                  className={cn(
+                    'flex size-[22px] flex-none items-center justify-center rounded-full text-[11px] font-bold',
+                    i < step
+                      ? 'bg-brand text-brand-foreground'
+                      : i === step
+                        ? 'bg-brand-soft text-brand ring-1 ring-brand'
+                        : 'bg-surface2 text-ink3'
+                  )}
+                >
+                  {i < step ? <Check size={12} /> : i + 1}
+                </span>
+                <span
+                  className={cn(
+                    'text-[11.5px] font-semibold',
+                    i === step ? 'text-ink' : 'text-ink3'
+                  )}
+                >
+                  {label}
+                </span>
+              </button>
               {i < STEPS.length - 1 && <span className="h-px flex-1 bg-line" />}
             </div>
           ))}
@@ -215,10 +268,14 @@ export function FloorDialog({
                   <button
                     key={opt.v}
                     type="button"
-                    onClick={() => setKind(opt.v)}
+                    onClick={() => !isEdit && setKind(opt.v)}
+                    disabled={isEdit}
+                    title={isEdit ? "A floor's type can't be changed after creation" : undefined}
                     className={cn(
                       'flex items-start gap-[10px] rounded-xl border p-[11px_12px] text-left',
-                      kind === opt.v ? 'border-brand bg-brand-soft' : 'border-line bg-surface hover:bg-surface2'
+                      kind === opt.v ? 'border-brand bg-brand-soft' : 'border-line bg-surface hover:bg-surface2',
+                      isEdit && 'cursor-not-allowed',
+                      isEdit && kind !== opt.v && 'opacity-45'
                     )}
                   >
                     <opt.Icon size={17} className={kind === opt.v ? 'text-brand' : 'text-ink3'} strokeWidth={1.7} />
@@ -260,11 +317,21 @@ export function FloorDialog({
                       setSlugTouched(true);
                       setSlug(e.target.value.toLowerCase());
                     }}
+                    readOnly={isEdit}
                     placeholder="accounting-3f"
-                    className={cn(inputCls, 'font-mono', slug && !slugValid && 'border-bad')}
+                    className={cn(
+                      inputCls,
+                      'font-mono',
+                      isEdit && 'cursor-not-allowed opacity-60',
+                      slug && !slugValid && 'border-bad'
+                    )}
                   />
                   <span className={cn('text-[10.5px]', slug && !slugValid ? 'text-bad' : 'text-ink3')}>
-                    {slug && !slugValid ? 'Lowercase letters, numbers, hyphens.' : 'Unique URL id within this property.'}
+                    {isEdit
+                      ? 'The slug is permanent.'
+                      : slug && !slugValid
+                        ? 'Lowercase letters, numbers, hyphens.'
+                        : 'Unique URL id within this property.'}
                   </span>
                 </label>
               </div>
@@ -312,7 +379,9 @@ export function FloorDialog({
                     <X size={14} />
                   </button>
                   <div className="absolute bottom-2 left-2 rounded-md bg-black/55 px-[8px] py-[3px] font-mono text-[10.5px] text-white">
-                    {image.width}×{image.height} · ratio {image.aspect.toFixed(2)}
+                    {image.width != null
+                      ? `${image.width}×${image.height} · ratio ${image.aspect.toFixed(2)}`
+                      : `Current plan · ratio ${image.aspect.toFixed(2)}`}
                   </div>
                 </div>
               )}
@@ -417,7 +486,7 @@ export function FloorDialog({
           <Button
             variant="ghost"
             onClick={() => (step === 0 ? onOpenChange(false) : setStep((s) => s - 1))}
-            disabled={create.isPending}
+            disabled={pending}
           >
             {step === 0 ? (
               'Cancel'
@@ -429,8 +498,8 @@ export function FloorDialog({
             )}
           </Button>
           {last ? (
-            <Button onClick={submit} disabled={create.isPending || !step1Valid}>
-              {create.isPending ? 'Creating…' : 'Create floor'}
+            <Button onClick={submit} disabled={pending || !step1Valid}>
+              {pending ? (isEdit ? 'Saving…' : 'Creating…') : isEdit ? 'Save changes' : 'Create floor'}
             </Button>
           ) : (
             <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>

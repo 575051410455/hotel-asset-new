@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrap } from './api';
-import type { Device, FloorWithPins } from './types';
+import type { Device, Floor, FloorWithPins } from './types';
 
 export const deviceKeys = {
   all: (hotelId: string) => ['devices', hotelId] as const,
@@ -81,6 +81,31 @@ export function useCreateFloor(hotelId: string | null) {
   return useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       api.floors.$post({ json: { ...body, hotelId } }).then(unwrap) as Promise<FloorWithPins>,
+    onSuccess: invalidate,
+  });
+}
+
+// Update a floor (rename, replace plan image, edit departments, reorder) for the
+// active property — PATCH /api/floors/:slug?hotelId=. The slug (`id`) and kind are
+// immutable; everything else in updateFloorSchema is patchable. Requires `floors:crud`.
+export function useUpdateFloor(hotelId: string | null) {
+  const invalidate = useInvalidate(hotelId);
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      api.floors[':id']
+        .$patch({ param: { id }, query: { hotelId }, json: patch })
+        .then(unwrap) as Promise<Floor>,
+    onSuccess: invalidate,
+  });
+}
+
+// Soft-delete a floor and detach its pins (devices stay in the inventory but lose
+// their placement) — DELETE /api/floors/:slug?hotelId=. Requires `floors:crud`.
+export function useDeleteFloor(hotelId: string | null) {
+  const invalidate = useInvalidate(hotelId);
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.floors[':id'].$delete({ param: { id }, query: { hotelId } }).then(unwrap),
     onSuccess: invalidate,
   });
 }

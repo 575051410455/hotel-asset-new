@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { Mail } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { api, unwrap } from '@/lib/api';
 import { avatarColor, initials, type AuthUser } from '@/lib/types';
@@ -43,7 +44,7 @@ function ProfilePage() {
       <PropertyAccessCard
         hotels={hotels.map((h) => ({ name: h.name, code: h.code, roleId: h.roleId, sources: h.sources }))}
       />
-      <NotificationsCard userId={user.id} />
+      <NotificationsCard userId={user.id} userEmail={user.email} />
     </div>
   );
 }
@@ -213,6 +214,8 @@ function PropertyAccessCard({
 }
 
 type NotifyState = {
+  emailEnabled: boolean;
+  emailAddress: string;
   lineEnabled: boolean;
   lineToken: string;
   lineTarget: string;
@@ -221,6 +224,8 @@ type NotifyState = {
   events: Record<string, boolean>;
 };
 const DEFAULT_NOTIFY: NotifyState = {
+  emailEnabled: false,
+  emailAddress: '',
   lineEnabled: false,
   lineToken: '',
   lineTarget: '',
@@ -229,20 +234,22 @@ const DEFAULT_NOTIFY: NotifyState = {
   events: { deviceOffline: true, cameraStops: true, apOffline: false, weekly: false },
 };
 
-function NotificationsCard({ userId }: { userId: number }) {
+function NotificationsCard({ userId, userEmail }: { userId: number; userEmail: string }) {
   const key = `om-notify-${userId}`;
-  const [n, setN] = useState<NotifyState>(DEFAULT_NOTIFY);
+  // The user's sign-in email is the default alert address until they change it.
+  const [n, setN] = useState<NotifyState>({ ...DEFAULT_NOTIFY, emailAddress: userEmail });
+  const [emailMsg, setEmailMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [lineMsg, setLineMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [discordMsg, setDiscordMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(key);
-      if (raw) setN({ ...DEFAULT_NOTIFY, ...JSON.parse(raw) });
+      if (raw) setN({ ...DEFAULT_NOTIFY, emailAddress: userEmail, ...JSON.parse(raw) });
     } catch {
       /* ignore */
     }
-  }, [key]);
+  }, [key, userEmail]);
 
   const patch = (p: Partial<NotifyState>) => setN((cur) => ({ ...cur, ...p }));
 
@@ -251,6 +258,11 @@ function NotificationsCard({ userId }: { userId: number }) {
     toast.success('Notification settings saved');
   };
 
+  const testEmail = () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.emailAddress.trim()))
+      return setEmailMsg({ ok: false, text: 'Enter a valid email address.' });
+    setEmailMsg({ ok: true, text: '✓ Test email sent (simulated)' });
+  };
   const testLine = () => {
     if (!n.lineToken.trim()) return setLineMsg({ ok: false, text: 'Enter a channel access token first.' });
     if (!/^[UCR]/.test(n.lineTarget.trim())) return setLineMsg({ ok: false, text: 'Recipient ID should start with U, C or R.' });
@@ -266,8 +278,29 @@ function NotificationsCard({ userId }: { userId: number }) {
     <div className={card}>
       <div className="text-[14.5px] font-bold">Notifications</div>
       <div className="mt-[3px] text-[12px] text-ink3">
-        Get alerts about your properties' devices on LINE or Discord.
+        Get alerts about your properties' devices by email, LINE or Discord.
       </div>
+
+      <Channel
+        badge={<Mail size={16} className="text-white" />}
+        badgeBg="var(--brand)"
+        title="Email"
+        sub="Send alerts to your inbox"
+        enabled={n.emailEnabled}
+        trackOn="var(--brand)"
+        onToggle={() => patch({ emailEnabled: !n.emailEnabled })}
+      >
+        <Field label="Email address">
+          <input
+            type="email"
+            value={n.emailAddress}
+            onChange={(e) => patch({ emailAddress: e.target.value })}
+            placeholder="you@example.com"
+            className={inputCls}
+          />
+        </Field>
+        <TestRow msg={emailMsg} label="Send test email" onTest={testEmail} />
+      </Channel>
 
       <Channel
         badge={<span className="text-[10px] font-extrabold text-white">LINE</span>}

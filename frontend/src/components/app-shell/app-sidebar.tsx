@@ -9,6 +9,7 @@ import {
   QrCode,
   User,
   ShieldCheck,
+  Layers,
   LogOut,
   ChevronsUpDown,
 } from 'lucide-react';
@@ -70,7 +71,7 @@ function NavGroup({ label, items, onNavigate }: { label?: string; items: NavItem
 }
 
 export function AppSidebar() {
-  const { activeHotelId } = useAuth();
+  const { activeHotelId, can } = useAuth();
   const { data: floors = [] } = useFloors(activeHotelId);
   const { location } = useRouterState();
   const path = location.pathname;
@@ -102,6 +103,17 @@ export function AppSidebar() {
   ];
 
   const adminItems: NavItem[] = [
+    ...(can('floors', 'read')
+      ? [
+          {
+            label: 'Manage floors',
+            icon: Layers,
+            to: '/floors',
+            search: undefined,
+            active: path === '/floors',
+          } as NavItem,
+        ]
+      : []),
     { label: 'My profile', icon: User, to: '/profile', search: undefined, active: path === '/profile' },
     { label: 'Access control', icon: ShieldCheck, to: '/access', search: undefined, active: path === '/access' },
   ];

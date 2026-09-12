@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createFileRoute, useNavigate, redirect } from '@tanstack/react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrap, TOKEN_KEY } from '@/lib/api';
+import { Button } from '@/components/ui/button';
 import type { LoginResponse } from '@/lib/types';
 
 export const Route = createFileRoute('/login')({
@@ -29,6 +30,32 @@ function LoginPage() {
   const [email, setEmail] = useState('');
   const [pwd, setPwd] = useState('');
   const [error, setError] = useState('');
+
+  // Is "Continue with Google" available on this server?
+  const { data: providers } = useQuery<{ google: boolean }>({
+    queryKey: ['auth-providers'],
+    queryFn: () => api.auth.providers.$get().then(unwrap),
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Handle the return trip from the Google callback: the backend redirects to
+  // /login#token=… on success or /login#error=… on failure.
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (!hash) return;
+    const params = new URLSearchParams(hash);
+    const token = params.get('token');
+    const err = params.get('error');
+    // Clear the fragment so a refresh doesn't re-trigger this.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+      navigate({ to: '/dashboard' });
+    } else if (err) {
+      setError(err);
+    }
+  }, [navigate]);
 
   const login = useMutation({
     mutationFn: (vars: { email: string; password: string }) =>
@@ -136,6 +163,28 @@ function LoginPage() {
             >
               {login.isPending ? 'Signing in…' : 'Sign in'}
             </button>
+
+            {providers?.google && (
+              <>
+                <div className="flex items-center gap-[10px]">
+                  <div className="h-px flex-1 bg-line" />
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink3">
+                    or
+                  </span>
+                  <div className="h-px flex-1 bg-line" />
+                </div>
+                <Button
+                  asChild
+                  variant="outline"
+                  className="h-[42px] w-full gap-[10px] rounded-[10px] text-[14px] font-semibold"
+                >
+                  <a href="/api/auth/google/start">
+                    <GoogleIcon />
+                    Continue with Google
+                  </a>
+                </Button>
+              </>
+            )}
           </div>
 
           <div className="mt-[26px]">
@@ -173,6 +222,29 @@ function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function GoogleIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z"
+      />
+      <path
+        fill="#34A853"
+        d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.02-3.7H.92v2.33A9 9 0 0 0 9 18Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M3.98 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.92a9 9 0 0 0 0 8.1l3.06-2.33Z"
+      />
+      <path
+        fill="#EA4335"
+        d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.47.9 11.43 0 9 0A9 9 0 0 0 .92 4.95l3.06 2.33C4.68 5.16 6.66 3.58 9 3.58Z"
+      />
+    </svg>
   );
 }
 

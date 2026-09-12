@@ -14,8 +14,9 @@ build/
 # Runtime user uploads (floor-plan images)
 backend/uploads/
 
-# Local Claude Code tooling config
+# Local AI tooling config
 .claude/
+.codex/
 
 # Not published to this repository
 _extracted/
