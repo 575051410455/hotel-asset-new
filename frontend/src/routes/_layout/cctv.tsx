@@ -24,7 +24,7 @@ function CctvMap() {
   const navigate = useNavigate();
   const { activeHotelId, can } = useAuth();
   const { data: floors = [], isLoading, isFetching, isError, refetch } = useFloors(activeHotelId, 'cctv');
-  // Creating a floor/zone (and uploading its plan) is a `floors:crud` capability
+  // Creating a floor (and uploading its plan) is a `floors:crud` capability
   // server-side, even for CCTV-kind floors.
   const canCrud = can('floors', 'crud');
   const readOnly = !can('cctv', 'crud') && can('cctv', 'read');
@@ -46,7 +46,7 @@ function CctvMap() {
               className="flex h-[30px] items-center gap-[6px] rounded-lg border border-line bg-surface px-[11px] text-[12px] font-semibold text-ink2 hover:text-ink"
             >
               <Plus size={14} />
-              Add zone
+              Add CCTV floor
             </button>
           )}
         </div>
