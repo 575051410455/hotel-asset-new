@@ -4,6 +4,7 @@ import {
   placementState,
   placementOptionsToRender,
   placementHint,
+  emptyFloorGuidance,
   type PlaceableFloor,
 } from './floor-placement';
 
@@ -68,6 +69,47 @@ describe('placementOptionsToRender', () => {
 
   test('the rendered options match what a placeable floor would accept', () => {
     expect(placementOptionsToRender(cctv, true)).toEqual(placementState(cctv, true).options);
+  });
+});
+
+describe('emptyFloorGuidance', () => {
+  test('a placeable floor names the button that actually exists', () => {
+    expect(emptyFloorGuidance(cctv, true, 'cctv')).toBe('Use Add camera to place the first pin.');
+    expect(emptyFloorGuidance(workstation, true, 'workstation')).toBe(
+      'Use Add workstation to place the first pin.'
+    );
+  });
+
+  test('a plan-less floor asks for the plan rather than for a pin', () => {
+    expect(emptyFloorGuidance(planless, true, 'cctv')).toContain('Upload a floor plan');
+  });
+
+  test('never tells a viewer to press a control they do not have', () => {
+    for (const floor of [cctv, workstation, planless]) {
+      const text = emptyFloorGuidance(floor, false, 'cctv');
+      expect(text).not.toContain('Use Add');
+      expect(text).not.toContain('Upload');
+    }
+  });
+
+  test('no floor at all is reported as such, not as an empty floor', () => {
+    expect(emptyFloorGuidance(null, true, 'cctv')).toContain('No floors yet');
+    expect(emptyFloorGuidance(null, false, 'cctv')).toContain('No floors have been set up');
+    // Crucially, it must not send the user after a button for a floor that
+    // doesn't exist — the bug this function was extracted to prevent.
+    expect(emptyFloorGuidance(null, true, 'cctv')).not.toContain('Add camera');
+  });
+
+  test('the guidance agrees with what the buttons do', () => {
+    // If it names a button, that button must be enabled; if it doesn't, the
+    // floor must genuinely be unplaceable.
+    for (const floor of [cctv, workstation, planless, null]) {
+      for (const canEdit of [true, false]) {
+        const text = emptyFloorGuidance(floor, canEdit, 'cctv');
+        const placeable = placementState(floor, canEdit).canPlace;
+        expect(text.startsWith('Use Add')).toBe(placeable);
+      }
+    }
   });
 });
 

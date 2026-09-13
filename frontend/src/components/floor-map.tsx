@@ -11,6 +11,7 @@ import {
   placementState,
   placementOptionsToRender,
   placementHint,
+  emptyFloorGuidance,
   type PlacementTab,
 } from '@/lib/floor-placement';
 import { useDeleteDevice } from '@/lib/devices';
@@ -853,13 +854,11 @@ export function FloorMapView({
           {isEmpty && (
             <Overlay>
               <div className="text-[13.5px] font-bold text-ink">No {isCam ? 'cameras' : 'devices'} on this floor</div>
-              {/* Two different situations that used to share one misleading
-                  message: the floor genuinely has no plan yet, or it has one
-                  and simply nothing placed. They need different next steps. */}
+              {/* Driven by the same decision as the Add buttons, so this can
+                  never point at a control the viewer doesn't have or a floor
+                  that doesn't exist. */}
               <div className="max-w-[280px] text-center text-[12px] text-ink3">
-                {floor && !floor.image
-                  ? 'Upload a floor plan for this floor, then place pins on it.'
-                  : `Use ${isCam ? 'Add camera' : 'Add workstation'} to place the first pin.`}
+                {emptyFloorGuidance(floor, canEdit, kind)}
               </div>
             </Overlay>
           )}
