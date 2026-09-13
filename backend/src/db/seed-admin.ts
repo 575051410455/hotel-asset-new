@@ -18,6 +18,7 @@ import bcrypt from 'bcryptjs';
 import { and, eq } from 'drizzle-orm';
 import { db } from './index';
 import { roles, hotels, users, assignments, type RolePerms } from './schema';
+import { withLegacyAccessKey } from '../lib/permissions';
 
 const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 const password = process.env.ADMIN_PASSWORD;
@@ -33,16 +34,22 @@ const propertyCode = process.env.PROPERTY_CODE?.trim() || 'HQ';
 const propertyName = process.env.PROPERTY_NAME?.trim() || 'Head Office';
 const propertyCity = process.env.PROPERTY_CITY?.trim() || '';
 
-const ADMIN_PERMS: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' };
+const ADMIN_PERMS = withLegacyAccessKey({
+  devices: 'crud',
+  floors: 'crud',
+  cctv: 'crud',
+  userManagement: 'crud',
+} satisfies RolePerms);
 
 async function seedAdmin() {
   console.log('Bootstrapping admin (no demo data)…');
 
-  // 1. built-in admin role
+  // 1. built-in admin role. Reconciled rather than skipped when it exists, so a
+  //    role written before the permission rename gains the userManagement key.
   await db
     .insert(roles)
     .values({ id: 'admin', name: 'Administrator', description: 'Full control.', builtin: true, perms: ADMIN_PERMS })
-    .onConflictDoNothing();
+    .onConflictDoUpdate({ target: roles.id, set: { perms: ADMIN_PERMS } });
 
   // 2. one property to attach the admin to (login shows "No properties assigned"
   //    without at least one accessible property)
@@ -66,6 +73,10 @@ async function seedAdmin() {
     userId = created.id;
     console.log(`  created user ${email}`);
   }
+
+  // The bootstrap account holds platform-wide User Management authority. Only
+  //    that flag is reconciled on an existing account — never its credential.
+  await db.update(users).set({ platformAdmin: true }).where(eq(users.id, userId));
 
   // 4. grant admin on the property (only if not already granted)
   const [granted] = await db

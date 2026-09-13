@@ -32,11 +32,22 @@ export const deviceStatusEnum = pgEnum('device_status', [
 
 // Permission level per resource, stored on a role.
 export type PermLevel = 'none' | 'read' | 'crud';
+// Canonical permissions a role grants. `userManagement` was persisted as
+// `access` before the rename — read roles through normalizeRolePerms
+// (src/lib/permissions.ts), never straight from the column.
 export type RolePerms = {
   devices: PermLevel;
   floors: PermLevel;
   cctv: PermLevel;
-  access: PermLevel;
+  userManagement: PermLevel;
+};
+// What roles.perms may hold while the rename overlaps: either key, or both.
+export type StoredRolePerms = {
+  devices?: PermLevel;
+  floors?: PermLevel;
+  cctv?: PermLevel;
+  userManagement?: PermLevel;
+  access?: PermLevel;
 };
 
 // ── Tables ───────────────────────────────────────────────────────────────────
@@ -55,7 +66,7 @@ export const roles = pgTable('roles', {
   name: varchar('name', { length: 80 }).notNull(),
   description: text('description').notNull().default(''),
   builtin: boolean('builtin').notNull().default(false),
-  perms: jsonb('perms').$type<RolePerms>().notNull(),
+  perms: jsonb('perms').$type<StoredRolePerms>().notNull(),
   // Optimistic concurrency: a stale editor's write is refused, not applied.
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').defaultNow(),

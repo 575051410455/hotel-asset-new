@@ -77,6 +77,53 @@ Known limits of this increment:
 - The permission-key rename (`access` → `userManagement`) belongs to phase 2
   and is not started.
 
+## Third increment — rollout phase 2 (permission key rename: expand + migrate)
+
+The `access` role permission is renamed `userManagement`, using the
+expand/migrate steps from the spec. Authorization is unchanged: the gate still
+uses the strongest level held at any hotel, now read under the new key. Scoping
+it per hotel belongs to phase 4.
+
+- **Readers:** all role permissions pass through `normalizeRolePerms`
+  (`backend/src/lib/permissions.ts`). It reads `userManagement`, then falls back
+  to `access`. A missing or unrecognised level becomes `none`, never `crud`. The
+  result carries only canonical resources, so a role's rank never counts this
+  permission twice.
+- **Writers and responses:** stored roles and API responses carry both keys at
+  the same level, so a client on the previous release keeps working. Role
+  create/update accepts either key and returns `400` when the two disagree. The
+  role dialog submits only canonical keys.
+- **Migration `0003_user_management_permission`:**
+  - Copies each role's exact level into `userManagement`, and adds `access` to
+    any role that lacks it.
+  - Sets `platform_admin` for every account that holds `crud` on the permission
+    at any hotel, directly or through a group attached to a hotel. This matches
+    who has global User Management authority today. Suspended holders keep the
+    flag but still cannot authenticate.
+  - Rolls the migration back if Active holders exist but no Active Platform
+    Administrator would remain.
+- **Seeds:** both use the new key. `db:seed:admin` now updates the built-in admin
+  role instead of skipping it, and marks the bootstrap account as a Platform
+  Administrator. It still never changes an existing credential.
+- **Verification:**
+  - Migration seam test: built-in and custom legacy roles, including a missing
+    key and an invalid level, keep their exact levels. Platform authority lands
+    on the direct, group and suspended holders, and not on viewers or members
+    of a group with no hotels. A rerun changes nothing.
+  - API integration tests: legacy-key and new-key role writes, the disagreement
+    `400`, and a role with neither key granting no authority.
+  - Dev database: all three built-in roles now carry `userManagement`, and chai
+    and ohm are the Platform Administrators. The backend suite passed (97 pass,
+    1 skip, 0 fail); the frontend tests passed (21/21); both packages typecheck.
+
+Still outstanding for the rename:
+
+- Phase 4: the renamed UI route, `/api/user-management` with a temporary
+  compatibility mount, and Hotel Administrator scoping.
+- Contract step: stop writing `access`, drop the key and its fallback, and
+  refuse to proceed if any role would lack `userManagement`.
+- `platform_admin` is recorded but not yet consulted by any route.
+
 ## Remaining specification work
 
 Opaque PostgreSQL sessions, permanent revocation, cookie/CSRF migration, Google-only

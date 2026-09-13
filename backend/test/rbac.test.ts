@@ -11,9 +11,9 @@ import {
 } from '../src/lib/rbac';
 import type { RolePerms } from '../src/db/schema';
 
-const ADMIN: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' };
-const MANAGER: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'none' };
-const VIEWER: RolePerms = { devices: 'read', floors: 'read', cctv: 'read', access: 'none' };
+const ADMIN: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', userManagement: 'crud' };
+const MANAGER: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', userManagement: 'none' };
+const VIEWER: RolePerms = { devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' };
 
 const rolesById = new Map([
   ['admin', { id: 'admin', perms: ADMIN }],
@@ -102,12 +102,12 @@ describe('bestPermFor', () => {
   );
 
   test('returns the highest level across all properties', () => {
-    expect(bestPermFor(access, rolesById, 'access')).toBe('crud'); // only via admin@rh2
+    expect(bestPermFor(access, rolesById, 'userManagement')).toBe('crud'); // only via admin@rh2
     expect(bestPermFor(access, rolesById, 'devices')).toBe('crud');
   });
 
   test('scopes to a single property when given', () => {
-    expect(bestPermFor(access, rolesById, 'access', 'rh3')).toBe('none'); // viewer has no access perm
+    expect(bestPermFor(access, rolesById, 'userManagement', 'rh3')).toBe('none'); // viewer has no User Management perm
     expect(bestPermFor(access, rolesById, 'devices', 'rh3')).toBe('read');
     expect(bestPermFor(access, rolesById, 'floors', 'rh2')).toBe('crud');
   });
@@ -118,5 +118,5 @@ describe('bestPermFor', () => {
 });
 
 test('PERM_RESOURCES is the canonical resource list', () => {
-  expect([...PERM_RESOURCES]).toEqual(['devices', 'floors', 'cctv', 'access']);
+  expect([...PERM_RESOURCES]).toEqual(['devices', 'floors', 'cctv', 'userManagement']);
 });

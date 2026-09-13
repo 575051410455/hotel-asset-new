@@ -6,7 +6,7 @@ export type { Device, Floor, HotelAccess };
 
 export type DeviceStatus = 'active' | 'paused' | 'nodata' | 'rec' | 'offline';
 export type PermLevel = 'none' | 'read' | 'crud';
-export type Resource = 'devices' | 'floors' | 'cctv' | 'access';
+export type Resource = 'devices' | 'floors' | 'cctv' | 'userManagement';
 
 export type FloorWithPins = Floor & { pins: Device[] };
 

@@ -22,6 +22,13 @@
       "when": 1789310519647,
       "tag": "0002_security_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789312481855,
+      "tag": "0003_user_management_permission",
+      "breakpoints": true
     }
   ]
 }

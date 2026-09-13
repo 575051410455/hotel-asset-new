@@ -4,6 +4,7 @@ import { inArray } from 'drizzle-orm';
 import { db } from '../db';
 import { hotels as hotelsTable, type RolePerms } from '../db/schema';
 import { getUserAccess, accessibleHotelIds, type EffectiveAccess } from './rbac';
+import { normalizeRolePerms, withLegacyAccessKey, type CompatRolePerms } from './permissions';
 
 export type HotelAccess = {
   id: string;
@@ -13,7 +14,9 @@ export type HotelAccess = {
   sortOrder: number;
   roleId: string;
   roleName: string;
-  perms: RolePerms;
+  // Canonical keys plus the legacy `access` mirror, so a client from the previous
+  // release keeps working while the permission rename overlaps.
+  perms: CompatRolePerms;
   sources: string[];
 };
 
@@ -50,7 +53,7 @@ export async function buildUserContext(userId: number): Promise<UserContext> {
         sortOrder: h.sortOrder,
         roleId: entry.roleId,
         roleName: ROLE_NAMES[entry.roleId] ?? entry.roleId,
-        perms: role?.perms ?? { devices: 'none', floors: 'none', cctv: 'none', access: 'none' },
+        perms: withLegacyAccessKey(role?.perms ?? normalizeRolePerms(null)),
         sources: entry.sources,
       };
     })

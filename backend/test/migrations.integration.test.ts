@@ -7,6 +7,8 @@
 // cannot create databases, like the other integration suites.
 import { afterAll, describe, expect, test } from 'bun:test';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import postgres from 'postgres';
 import { runMigrations, MIGRATIONS_DIR } from '../src/db/migrate';
 
@@ -34,6 +36,18 @@ if (baseUrl) {
 }
 
 const created: string[] = [];
+const tmpDirs: string[] = [];
+
+// A copy of the migrations folder whose journal stops after the first `count`
+// entries — a database "on the previous release" to put legacy data into.
+function migrationsUpTo(count: number): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-migrations-'));
+  tmpDirs.push(dir);
+  fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true });
+  const partial = { ...journal, entries: journal.entries.slice(0, count) };
+  fs.writeFileSync(`${dir}/meta/_journal.json`, JSON.stringify(partial));
+  return dir;
+}
 
 async function freshDatabase(): Promise<string> {
   const name = `zz_test_migrate_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
@@ -101,6 +115,7 @@ const historyOf = (url: string) =>
   });
 
 afterAll(async () => {
+  for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
   if (!created.length) return;
   const admin = postgres(maintenanceUrl, { max: 1, onnotice: () => {} });
   try {
@@ -187,5 +202,68 @@ suite('database migrations (integration)', () => {
         await errorOf(sql`insert into users (email, name, status) values ('b@example.invalid', 'B', 'deleted')`)
       ).toContain('users_status_check');
     });
+  });
+
+  test('the permission rename copies each exact level, never defaults to CRUD, and records who holds platform authority', async () => {
+    const url = await freshDatabase();
+    const beforeRename = journal.entries.findIndex((e) => e.tag === '0003_user_management_permission');
+    expect(beforeRename).toBeGreaterThan(0);
+    await runMigrations(url, migrationsUpTo(beforeRename));
+
+    // Legacy data, as the previous release wrote it.
+    const ids = await withSql(url, async (sql) => {
+      await sql`insert into hotels (id, code, name, city) values ('h1', 'H1', 'Hotel 1', 'Town')`;
+      const legacy = (id: string, perms: Record<string, string>) =>
+        sql`insert into roles (id, name, perms) values (${id}, ${id}, ${sql.json(perms)})`;
+      await legacy('admin', { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' });
+      await legacy('manager', { devices: 'crud', floors: 'crud', cctv: 'read', access: 'read' });
+      await legacy('viewer', { devices: 'read', floors: 'read', cctv: 'read', access: 'none' });
+      await legacy('custom-auditor', { devices: 'read', floors: 'none', cctv: 'none', access: 'read' });
+      await legacy('custom-no-key', { devices: 'crud', floors: 'crud', cctv: 'crud' });
+      await legacy('custom-bad-level', { devices: 'read', floors: 'read', cctv: 'read', access: 'owner' });
+
+      const user = async (email: string, status = 'active') =>
+        (await sql`insert into users (email, name, status) values (${email}, ${email}, ${status}) returning id`)[0].id as number;
+      const direct = await user('direct-admin@x.invalid');
+      const viaGroup = await user('group-admin@x.invalid');
+      const suspended = await user('suspended-admin@x.invalid', 'suspended');
+      const viewer = await user('viewer@x.invalid');
+      const noHotels = await user('group-without-hotels@x.invalid');
+
+      await sql`insert into assignments (user_id, hotel_id, role_id) values
+        (${direct}, 'h1', 'admin'), (${suspended}, 'h1', 'admin'), (${viewer}, 'h1', 'viewer')`;
+      const [g1] = await sql`insert into groups (name, role_id) values ('Ops', 'admin') returning id`;
+      await sql`insert into group_hotels (group_id, hotel_id) values (${g1.id}, 'h1')`;
+      await sql`insert into group_members (group_id, user_id) values (${g1.id}, ${viaGroup})`;
+      // A group with no hotels grants nothing, so it confers no authority either.
+      const [g2] = await sql`insert into groups (name, role_id) values ('Empty', 'admin') returning id`;
+      await sql`insert into group_members (group_id, user_id) values (${g2.id}, ${noHotels})`;
+      return { direct, viaGroup, suspended, viewer, noHotels };
+    });
+
+    expect(await runMigrations(url)).toEqual({ baselined: 0, applied: TOTAL - beforeRename });
+
+    await withSql(url, async (sql) => {
+      const perms = Object.fromEntries(
+        (await sql`select id, perms from roles`).map((r) => [r.id, r.perms as Record<string, string>])
+      );
+      expect(perms.admin).toMatchObject({ userManagement: 'crud', access: 'crud' });
+      expect(perms.manager).toMatchObject({ userManagement: 'read', access: 'read' });
+      expect(perms.viewer).toMatchObject({ userManagement: 'none', access: 'none' });
+      expect(perms['custom-auditor']).toMatchObject({ userManagement: 'read', access: 'read', devices: 'read' });
+      expect(perms['custom-no-key']).toMatchObject({ userManagement: 'none', access: 'none', devices: 'crud' });
+      expect(perms['custom-bad-level'].userManagement).toBe('none');
+
+      const platform = new Map(
+        (await sql`select id, platform_admin from users`).map((r) => [r.id as number, r.platform_admin as boolean])
+      );
+      expect(platform.get(ids.direct)).toBe(true);
+      expect(platform.get(ids.viaGroup)).toBe(true);
+      expect(platform.get(ids.suspended)).toBe(true); // authority kept, still unusable while suspended
+      expect(platform.get(ids.viewer)).toBe(false);
+      expect(platform.get(ids.noHotels)).toBe(false);
+    });
+
+    expect(await runMigrations(url)).toEqual({ baselined: 0, applied: 0 });
   });
 });

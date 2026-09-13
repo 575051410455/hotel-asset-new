@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrap } from './api';
 import type { PermLevel } from './types';
 
-export type RolePerms = { devices: PermLevel; floors: PermLevel; cctv: PermLevel; access: PermLevel };
+export type RolePerms = { devices: PermLevel; floors: PermLevel; cctv: PermLevel; userManagement: PermLevel };
 
 export type AccessUser = {
   id: number;

@@ -16,10 +16,11 @@ import bcrypt from 'bcryptjs';
 import { and, eq, like } from 'drizzle-orm';
 import app from '../src/app';
 import { db } from '../src/db';
-import { users, groups, assignments, groupHotels, groupMembers } from '../src/db/schema';
+import { users, groups, assignments, groupHotels, groupMembers, roles } from '../src/db/schema';
 
 const USER_PREFIX = 'zz-test-access-';
 const GROUP_PREFIX = 'zz-test-access-grp';
+const ROLE_PREFIX = 'zz-test-access-role';
 const ADMIN_EMAIL = `${USER_PREFIX}admin@example.invalid`;
 const MEMBER_EMAIL = `${USER_PREFIX}member@example.invalid`;
 const PASSWORD = 'zz-test-Pa55word!';
@@ -59,6 +60,8 @@ async function login(email: string, password: string): Promise<string> {
 async function cleanup() {
   await db.delete(groups).where(like(groups.name, `${GROUP_PREFIX}%`));
   await db.delete(users).where(like(users.email, `${USER_PREFIX}%`));
+  // After users: their assignments (which cascade with them) reference roles.
+  await db.delete(roles).where(like(roles.name, `${ROLE_PREFIX}%`));
 }
 
 const suite = reachable ? describe : describe.skip;
@@ -219,5 +222,55 @@ suite('access-control mutations (integration)', () => {
 
     const rows = await db.select().from(groupMembers).where(eq(groupMembers.userId, memberId));
     expect(rows.map((r) => r.groupId)).toContain(group.id);
+  });
+
+  // ── Permission rename overlap: legacy `access` and `userManagement` ─────────
+  const postRole = (name: string, perms: Record<string, string>) =>
+    api('/api/access/roles', { method: 'POST', headers: auth(), body: JSON.stringify({ name, perms }) });
+  const storedPerms = async (id: string) =>
+    (await db.select({ perms: roles.perms }).from(roles).where(eq(roles.id, id)))[0].perms;
+
+  test('a role saved with the legacy access key is stored under both keys at the same level', async () => {
+    const res = await postRole(`${ROLE_PREFIX}-legacy`, { devices: 'read', floors: 'read', cctv: 'none', access: 'read' });
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: string };
+    expect(await storedPerms(id)).toEqual({
+      devices: 'read', floors: 'read', cctv: 'none', userManagement: 'read', access: 'read',
+    });
+  });
+
+  test('a role saved with userManagement keeps the legacy mirror, and is listed with both', async () => {
+    const res = await postRole(`${ROLE_PREFIX}-new`, { devices: 'none', floors: 'none', cctv: 'none', userManagement: 'crud' });
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: string };
+    expect(await storedPerms(id)).toMatchObject({ userManagement: 'crud', access: 'crud' });
+
+    const listed = (await (await api('/api/access/roles', { headers: auth() })).json()) as {
+      id: string;
+      perms: Record<string, string>;
+    }[];
+    expect(listed.find((r) => r.id === id)?.perms).toMatchObject({ userManagement: 'crud', access: 'crud' });
+  });
+
+  test('a role whose userManagement and access values disagree is refused', async () => {
+    const res = await postRole(`${ROLE_PREFIX}-conflict`, {
+      devices: 'read', floors: 'read', cctv: 'read', userManagement: 'read', access: 'crud',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('a stored role carrying neither key grants no User Management authority', async () => {
+    const id = `${ROLE_PREFIX}-nokey`;
+    await db.insert(roles).values({ id, name: id, perms: { devices: 'read', floors: 'read', cctv: 'read' } });
+    await db.delete(assignments).where(eq(assignments.userId, memberId));
+    await db.insert(assignments).values({ userId: memberId, hotelId: 'rh2', roleId: id });
+
+    const headers = { authorization: `Bearer ${await login(MEMBER_EMAIL, PASSWORD)}` };
+    const hotels = (await (await api('/api/hotels', { headers })).json()) as {
+      id: string;
+      perms: Record<string, string>;
+    }[];
+    expect(hotels.find((h) => h.id === 'rh2')?.perms.userManagement).toBe('none');
+    expect((await api('/api/access/users', { headers })).status).toBe(403);
   });
 });

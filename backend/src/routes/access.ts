@@ -11,7 +11,6 @@ import {
   groupMembers,
   assignments,
   hotels,
-  type RolePerms,
 } from '../db/schema';
 import {
   createUserSchema,
@@ -27,6 +26,7 @@ import {
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext, maxPerm } from '../lib/session';
 import { computeEffectiveAccess } from '../lib/rbac';
+import { normalizeRolePerms, withLegacyAccessKey } from '../lib/permissions';
 
 export const accessRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -87,10 +87,11 @@ async function missingRefs(refs: {
   return problems;
 }
 
-// Gate every request on the caller's global `access` permission.
+// Gate every request on the caller's global User Management permission (still
+// the strongest level held at any hotel — scoping it per hotel is a later phase).
 async function gate(userId: number, level: 'read' | 'crud') {
   const ctx = await buildUserContext(userId);
-  const have = maxPerm(ctx, 'access');
+  const have = maxPerm(ctx, 'userManagement');
   const ok = level === 'read' ? have === 'read' || have === 'crud' : have === 'crud';
   return { ok, have };
 }
@@ -121,7 +122,7 @@ accessRoutes.get('/users', authMiddleware, async (c) => {
     db.select().from(groupMembers),
   ]);
 
-  const rolesById = new Map(roleRows.map((r) => [r.id, { id: r.id, perms: r.perms as RolePerms }]));
+  const rolesById = new Map(roleRows.map((r) => [r.id, { id: r.id, perms: normalizeRolePerms(r.perms) }]));
   const roleNameById = new Map(roleRows.map((r) => [r.id, r.name]));
   const hotelsOfGroup = new Map<number, string[]>();
   ghRows.forEach((g) => hotelsOfGroup.set(g.groupId, [...(hotelsOfGroup.get(g.groupId) ?? []), g.hotelId]));
@@ -175,7 +176,7 @@ accessRoutes.get('/roles', authMiddleware, async (c) => {
     name: r.name,
     description: r.description,
     builtin: r.builtin,
-    perms: r.perms,
+    perms: withLegacyAccessKey(normalizeRolePerms(r.perms)),
     usage: {
       direct: assignRows.filter((a) => a.roleId === r.id).length,
       groups: groupRows.filter((g) => g.roleId === r.id).length,
@@ -331,7 +332,13 @@ accessRoutes.post('/roles', authMiddleware, zValidator('json', createRoleSchema)
   const id = 'r-' + Date.now().toString(36);
   const [created] = await db
     .insert(roles)
-    .values({ id, name: body.name, description: body.description, builtin: false, perms: body.perms })
+    .values({
+      id,
+      name: body.name,
+      description: body.description,
+      builtin: false,
+      perms: withLegacyAccessKey(normalizeRolePerms(body.perms)),
+    })
     .returning();
   return c.json(created, 201);
 });
@@ -343,7 +350,12 @@ accessRoutes.patch('/roles/:id', authMiddleware, zValidator('json', updateRoleSc
   const [role] = await db.select().from(roles).where(eq(roles.id, id)).limit(1);
   if (!role) return c.json({ error: 'Role not found' }, 404);
   if (role.builtin) return c.json({ error: 'Built-in roles cannot be edited.' }, 400);
-  const [updated] = await db.update(roles).set(c.req.valid('json')).where(eq(roles.id, id)).returning();
+  const patch = c.req.valid('json');
+  const [updated] = await db
+    .update(roles)
+    .set({ ...patch, perms: patch.perms ? withLegacyAccessKey(normalizeRolePerms(patch.perms)) : undefined })
+    .where(eq(roles.id, id))
+    .returning();
   return c.json(updated);
 });
 

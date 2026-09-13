@@ -121,8 +121,17 @@ export function RoleDialog({
   const update = useUpdateRole();
   const [name, setName] = useState(role?.name ?? '');
   const [desc, setDesc] = useState(role?.description ?? '');
+  // Only the canonical keys: the server also returns the legacy `access` mirror,
+  // which would disagree with an edited User Management level and be refused.
   const [perms, setPerms] = useState<RolePerms>(
-    role?.perms ?? { devices: 'read', floors: 'read', cctv: 'read', access: 'none' }
+    role
+      ? {
+          devices: role.perms.devices,
+          floors: role.perms.floors,
+          cctv: role.perms.cctv,
+          userManagement: role.perms.userManagement,
+        }
+      : { devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' }
   );
   const [error, setError] = useState('');
   const pending = create.isPending || update.isPending;

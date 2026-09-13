@@ -16,9 +16,9 @@ import {
   type RolePerms,
   type PermLevel,
 } from '../db/schema';
+import { PERM_RESOURCES, normalizeRolePerms, type Resource } from './permissions';
 
-export const PERM_RESOURCES = ['devices', 'floors', 'cctv', 'access'] as const;
-export type Resource = (typeof PERM_RESOURCES)[number];
+export { PERM_RESOURCES, type Resource };
 
 const SCORE: Record<PermLevel, number> = { none: 0, read: 1, crud: 2 };
 export function permScore(p: PermLevel | undefined): number {
@@ -85,7 +85,7 @@ export function bestPermFor(
 
 export async function loadRolesById(): Promise<Map<string, RoleLite>> {
   const rows = await db.select().from(rolesTable);
-  return new Map(rows.map((r) => [r.id, { id: r.id, perms: r.perms }]));
+  return new Map(rows.map((r) => [r.id, { id: r.id, perms: normalizeRolePerms(r.perms) }]));
 }
 
 // Compute a user's effective access straight from the database.

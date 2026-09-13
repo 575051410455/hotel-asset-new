@@ -43,7 +43,7 @@ const RESOURCES: { key: keyof AccessRole['perms']; label: string }[] = [
   { key: 'devices', label: 'Dashboard & devices' },
   { key: 'floors', label: 'Floor plans & pins' },
   { key: 'cctv', label: 'CCTV & cameras' },
-  { key: 'access', label: 'Users & access control' },
+  { key: 'userManagement', label: 'Users & access control' },
 ];
 
 const LEVEL_PILL: Record<string, { label: string; color: string; bg: string }> = {
@@ -71,8 +71,8 @@ function fmtLogin(iso: string | null): string {
 
 function AccessPage() {
   const { hotels: myHotels } = useAuth();
-  const canManage = myHotels.some((h) => h.perms.access === 'crud');
-  const canRead = myHotels.some((h) => h.perms.access !== 'none');
+  const canManage = myHotels.some((h) => h.perms.userManagement === 'crud');
+  const canRead = myHotels.some((h) => h.perms.userManagement !== 'none');
 
   const [tab, setTab] = useState<Tab>('users');
   const [search, setSearch] = useState('');

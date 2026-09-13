@@ -23,9 +23,9 @@ import {
   assignments,
   floors,
   devices,
-  type RolePerms,
   type NewDevice,
 } from './schema';
+import { withLegacyAccessKey } from '../lib/permissions';
 
 // The demo data/logic lives in the design handoff bundle under _extracted/.
 // It is gitignored (absent in production), so it is loaded dynamically inside
@@ -35,9 +35,9 @@ const HOME_HOTEL = 'rh2';
 
 // ── Ported role/group/user defaults (auth-config.js, not exported) ────────────
 const DEFAULT_ROLES = [
-  { id: 'admin', name: 'Administrator', builtin: true, description: 'Full control: devices, floor plans, cameras and access management.', perms: { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' } as RolePerms },
-  { id: 'manager', name: 'IT Manager', builtin: true, description: 'Manage devices and floor plans; view cameras and access settings.', perms: { devices: 'crud', floors: 'crud', cctv: 'read', access: 'read' } as RolePerms },
-  { id: 'viewer', name: 'Viewer', builtin: true, description: 'Read-only access to dashboards and floor maps.', perms: { devices: 'read', floors: 'read', cctv: 'read', access: 'none' } as RolePerms },
+  { id: 'admin', name: 'Administrator', builtin: true, description: 'Full control: devices, floor plans, cameras and access management.', perms: withLegacyAccessKey({ devices: 'crud', floors: 'crud', cctv: 'crud', userManagement: 'crud' }) },
+  { id: 'manager', name: 'IT Manager', builtin: true, description: 'Manage devices and floor plans; view cameras and access settings.', perms: withLegacyAccessKey({ devices: 'crud', floors: 'crud', cctv: 'read', userManagement: 'read' }) },
+  { id: 'viewer', name: 'Viewer', builtin: true, description: 'Read-only access to dashboards and floor maps.', perms: withLegacyAccessKey({ devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' }) },
 ];
 
 const DEFAULT_GROUPS = [

@@ -109,12 +109,25 @@ export const floorIdentSchema = z.object({
 });
 
 // ── Access control (users / roles / groups) ──────────────────────────────────
-export const rolePermsSchema = z.object({
-  devices: permLevelEnum,
-  floors: permLevelEnum,
-  cctv: permLevelEnum,
-  access: permLevelEnum,
-});
+// A role's permissions as submitted. `userManagement` replaces the legacy
+// `access` key; during the rename overlap either is accepted (a client on the
+// previous release still sends `access`), but not two different values.
+export const rolePermsSchema = z
+  .object({
+    devices: permLevelEnum,
+    floors: permLevelEnum,
+    cctv: permLevelEnum,
+    userManagement: permLevelEnum.optional(),
+    access: permLevelEnum.optional(),
+  })
+  .refine((p) => p.userManagement !== undefined || p.access !== undefined, {
+    message: 'The User Management permission is required',
+    path: ['userManagement'],
+  })
+  .refine((p) => p.userManagement === undefined || p.access === undefined || p.userManagement === p.access, {
+    message: 'userManagement and the legacy access permission disagree',
+    path: ['access'],
+  });
 
 export const createUserSchema = z.object({
   name: z.string().min(1).max(120),
