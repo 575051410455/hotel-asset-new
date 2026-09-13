@@ -28,7 +28,7 @@ cd backend
 bun install
 cp .env.example .env            # then fill in DATABASE_URL + JWT_SECRET
 bun run db:create               # create the database
-bun run db:push                 # push the schema
+bun run db:migrate              # apply the checked-in migrations (backend/drizzle)
 bun run db:seed                 # seed demo hotels, roles, users, floors, devices
 bun src/index.ts                # serve on :3000  (or: bun run dev)
 ```

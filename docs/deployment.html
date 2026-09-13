@@ -398,7 +398,7 @@ _smoke
   <section id="s4">
     <h2><span class="stepnum">4</span> Dockerfiles</h2>
     <h3>Backend — Bun + Hono API</h3>
-    <p>A thin Bun image. <code class="inline">bun install</code> also pulls <span class="mono">drizzle-kit</span> so we can push the schema from inside the container later.</p>
+    <p>A thin Bun image. <code class="inline">bun install</code> also pulls <span class="mono">drizzle-kit</span>; the schema is applied from inside the container with <code class="inline">db:migrate</code>.</p>
     <div class="code-card"><div class="code-head"><span class="fn">backend/Dockerfile</span><span class="lang">dockerfile</span><span class="copy">Copy</span></div><pre>FROM oven/bun:1-alpine
 WORKDIR /app
 
@@ -606,14 +606,15 @@ docker compose logs -f backend   <span class="c"># expect: "ops-monitor backend 
   <!-- STEP 8 -->
   <section id="s8">
     <h2><span class="stepnum">8</span> Create the schema &amp; seed data</h2>
-    <p class="lead">Postgres already created the empty <span class="mono">opsmonitor</span> database (via <code class="inline">POSTGRES_DB</code>). Now push the Drizzle schema and load the demo data — run these <b>once</b>, inside the backend container.</p>
-    <div class="code-card"><div class="code-head"><span class="fn">one-time DB init</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># create all tables from the Drizzle schema</span>
-docker compose exec backend bun run db:push
+    <p class="lead">Postgres already created the empty <span class="mono">opsmonitor</span> database (via <code class="inline">POSTGRES_DB</code>). Now apply the checked-in migrations and load the demo data — run these <b>once</b>, inside the backend container.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">one-time DB init</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># create all tables from the checked-in migrations (backend/drizzle)</span>
+docker compose exec backend bun run db:migrate
 
 <span class="c"># seed hotels, roles, users, floors, devices (demo accounts)</span>
 docker compose exec backend bun run db:seed</pre></div>
-    <div class="warn"><b>Seeding is for first launch / demos only.</b> <code class="inline">db:seed</code> clears and repopulates the tables — never run it against a database that already holds real data. For real use, push the schema, then create your admin via the Access Control screen and skip the seed (or run it once, then change every demo password).</div>
-    <div class="note"><b>Schema changes later?</b> This project uses <code class="inline">drizzle-kit push</code> (declarative). After pulling new code, re-run <code class="inline">db:push</code>. For audited migrations instead, switch to <code class="inline">db:generate</code> + <code class="inline">db:migrate</code>.</div>
+    <div class="warn"><b>Seeding is for first launch / demos only.</b> <code class="inline">db:seed</code> clears and repopulates the tables — never run it against a database that already holds real data. For real use, run the migrations, then create your admin via the Access Control screen and skip the seed (or run it once, then change every demo password).</div>
+    <div class="note"><b>Schema changes later?</b> Schema changes ship as reviewed SQL migrations in <span class="mono">backend/drizzle</span> (created with <code class="inline">db:generate</code>). After pulling new code, run <code class="inline">db:migrate</code>. A database that was originally built with <code class="inline">db:push</code> is detected and baselined automatically on the first run; if its shape doesn't match a known migration, the runner stops without changing anything.</div>
+    <div class="warn"><b>Don't run <code class="inline">db:push</code> any more.</b> It rewrites the live schema without recording history, and a database pushed past the migrations can no longer be baselined safely.</div>
   </section>
 
   <!-- STEP 9 -->
@@ -684,8 +685,8 @@ docker compose build
 echo "→ restarting services"
 docker compose up -d
 
-echo "→ applying any schema changes"
-docker compose exec -T backend bun run db:push
+echo "→ applying any schema migrations"
+docker compose exec -T backend bun run db:migrate
 
 echo "✓ redeploy complete"
 docker compose ps</pre></div>

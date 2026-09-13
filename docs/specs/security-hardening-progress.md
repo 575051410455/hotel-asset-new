@@ -28,6 +28,55 @@ session specification is not yet implemented.
   both floor selection and attached pin selection in SQL. A real-route regression
   test verifies a floor-only custom role cannot read CCTV floors or camera metadata.
 
+## Second increment — rollout phase 1 (storage foundation)
+
+Additive schema only. No route reads or writes the new tables yet, and sign-in,
+session and authorization behaviour are unchanged.
+
+- Real checked-in migrations replace `db:push`. `0001_google_identity_columns`
+  records the Google sign-in columns that the original `0000` migration lacked
+  (the drift noted in the spec). `bun run db:migrate` now runs
+  `backend/src/db/migrate.ts`, which applies `backend/drizzle` under an advisory
+  lock. A history-less database built with `db:push` is baselined first, but
+  only when its shape matches `0000`, or `0000` + `0001`. A half-built database,
+  partial Google columns, or later-phase tables without history stop the runner
+  with no changes.
+- `0002_security_foundation` adds:
+  - `sessions`: stores a SHA-256 digest of the opaque session identifier and of
+    the CSRF token, plus idle, absolute and recent-authentication timestamps,
+    revocation fields and client metadata.
+  - `audit_events`: append-only. A trigger refuses UPDATE, TRUNCATE and DELETE
+    unless the retention purge opts in for its own transaction. There are no
+    foreign keys, so events outlive the rows they mention.
+  - `rate_limit_buckets`: shared fixed-window throttling state.
+  - `break_glass_mfa` (TOTP ciphertext and last accepted step, for replay
+    rejection) and hashed single-use `recovery_codes`.
+  - On users: `platform_admin`, `break_glass`, `archived_at` and a `version`
+    column, with a CHECK limiting status to active, suspended or archived.
+  - A `version` column on roles and groups, for optimistic concurrency.
+- The migration seam test (`test/migrations.integration.test.ts`) runs against
+  disposable databases. It covers:
+  - a fresh migration, and a second run that changes nothing
+  - baselining a push-built database while preserving its rows
+  - baselining a pre-Google database
+  - refusing a half-built database
+  - the append-only audit trigger, including the purge opt-in
+  - the account status constraint
+- The local development database was baselined (2 migrations recorded) and
+  received `0002`. The backend suite passed (86 pass, 1 skip, 0 fail), and both
+  packages typecheck.
+- Deployment docs now use `db:migrate` and warn against returning to `db:push`.
+  The production database has not been migrated. The first production
+  `db:migrate` will baseline it, and it should be backed up first.
+
+Known limits of this increment:
+
+- The purge opt-in is a transaction setting, not a separate database role. The
+  spec's separately privileged retention task is still outstanding.
+- The TOTP encryption key is not configured or validated yet.
+- The permission-key rename (`access` → `userManagement`) belongs to phase 2
+  and is not started.
+
 ## Remaining specification work
 
 Opaque PostgreSQL sessions, permanent revocation, cookie/CSRF migration, Google-only
