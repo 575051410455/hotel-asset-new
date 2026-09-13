@@ -20,6 +20,12 @@ import {
 const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'default-secret');
 const OAUTH_STATE_COOKIE = 'om_oauth_state';
 
+// A bcrypt hash of a discarded random string, compared against when the email
+// doesn't exist so a failed lookup costs the same time as a failed password
+// check. The comparison's result is thrown away — this can never authenticate
+// anyone. Cost 10, matching db:seed:admin.
+const DUMMY_HASH = '$2b$10$QZ.POmV1LCDUNIfwZEl5C.qOoZyUontyzyJSAy.aKxExhm65/oD8a';
+
 export const authRoutes = new Hono<{ Variables: AuthVariables }>();
 
 // Public profile shape returned to the client (never the password hash).
@@ -60,7 +66,16 @@ authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
     .where(eq(users.email, email.toLowerCase()))
     .limit(1);
 
-  if (!user) return c.json({ error: 'No account found for that email.' }, 401);
+  // One message for "no such email" AND "wrong password", so the response can't
+  // be used to enumerate which addresses hold accounts.
+  const BAD_CREDENTIALS = 'Incorrect email or password.';
+
+  if (!user) {
+    // Hash anyway: returning early here would make a missing account measurably
+    // faster to reject than a wrong password, which leaks the same fact timing-wise.
+    await bcrypt.compare(password, DUMMY_HASH);
+    return c.json({ error: BAD_CREDENTIALS }, 401);
+  }
 
   // Google-provisioned accounts have no local password.
   if (!user.passwordHash) {
@@ -68,7 +83,7 @@ authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) return c.json({ error: 'Incorrect password. Try a demo account below.' }, 401);
+  if (!valid) return c.json({ error: BAD_CREDENTIALS }, 401);
 
   if (user.status !== 'active') {
     return c.json({ error: 'This account is suspended. Contact an administrator.' }, 403);

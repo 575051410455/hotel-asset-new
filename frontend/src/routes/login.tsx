@@ -18,12 +18,6 @@ const BRAND_HOTELS = [
   { code: 'RBR', name: 'Richmond Beach Resort', city: 'Pattaya' },
 ];
 
-const DEMOS = [
-  { label: 'Administrator', email: 'chai@richmond.local', pwd: 'admin123', note: 'All 3 properties', color: 'var(--brand)' },
-  { label: 'IT Manager', email: 'smart@richmond.local', pwd: 'manager123', note: 'RH2 + RH3', color: 'var(--ok)' },
-  { label: 'Viewer (read-only)', email: 'gift@richmond.local', pwd: 'user123', note: 'RH2 only', color: 'var(--warn)' },
-];
-
 function LoginPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -132,7 +126,7 @@ function LoginPage() {
                   setError('');
                 }}
                 onKeyDown={onKey}
-                placeholder="you@richmond.local"
+                placeholder="you@company.com"
                 autoFocus
                 className="h-10 rounded-[10px] border border-line bg-surface px-[13px] text-[13.5px] outline-none focus:border-brand"
               />
@@ -187,37 +181,8 @@ function LoginPage() {
             )}
           </div>
 
-          <div className="mt-[26px]">
-            <div className="flex items-center gap-[10px]">
-              <div className="h-px flex-1 bg-line" />
-              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink3">
-                Demo accounts
-              </span>
-              <div className="h-px flex-1 bg-line" />
-            </div>
-            <div className="mt-[12px] flex flex-col gap-[7px]">
-              {DEMOS.map((d) => (
-                <button
-                  key={d.email}
-                  onClick={() => {
-                    setEmail(d.email);
-                    setPwd(d.pwd);
-                    setError('');
-                  }}
-                  className="flex items-center gap-[10px] rounded-[10px] border border-line bg-surface px-[12px] py-[9px] text-left transition-colors hover:border-brand hover:bg-brand-soft"
-                >
-                  <span className="size-2 flex-none rounded-full" style={{ background: d.color }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[12.5px] font-semibold text-ink">{d.label}</span>
-                    <span className="block font-mono text-[11px] text-ink3">{d.email}</span>
-                  </span>
-                  <span className="whitespace-nowrap text-[11px] text-ink3">{d.note}</span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-[16px] text-center text-[11px] text-ink3">
-              Signed accounts are stored on the Ops Monitor server.
-            </div>
+          <div className="mt-[26px] text-center text-[11px] text-ink3">
+            Accounts are issued by IT Operations. Contact your administrator for access.
           </div>
         </div>
       </div>

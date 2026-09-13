@@ -74,7 +74,7 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
 
   const fields: { key: keyof typeof f; label: string; ph: string }[] = [
     { key: 'name', label: 'Full name', ph: 'e.g. Nok F.' },
-    { key: 'email', label: 'Email', ph: 'name@richmond.local' },
+    { key: 'email', label: 'Email', ph: 'name@company.com' },
     { key: 'phone', label: 'Phone', ph: '08x-xxx-xxxx' },
     { key: 'title', label: 'Job title', ph: 'e.g. Accountant' },
     { key: 'department', label: 'Department', ph: 'e.g. Account' },
