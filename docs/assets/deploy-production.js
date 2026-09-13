@@ -17,8 +17,9 @@
   // Placeholder name -> default value. Any element carrying data-var="domain"
   // (or {{domain}} inside a <pre>) is filled from here.
   var DEFAULTS = {
-    domain: 'ops.example.com',
-    tunnel: 'ops-monitor',
+    domain: 'map.csprint.co.th',
+    network: 'hms-network',
+    lan: '192.168.1.50',
     user: 'deploy',
     dir: 'ops-monitor',
   };

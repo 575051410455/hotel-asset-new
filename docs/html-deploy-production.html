@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ops Monitor — Production Deploy: Docker Compose + Cloudflare Tunnel</title>
-<meta name="description" content="Deploy the Ops Monitor stack to a VPS with Docker Compose behind a Cloudflare Tunnel — no open ports, no certbot, DNS and nginx included.">
+<title>Ops Monitor — Production Deploy via the Existing Cloudflare Tunnel</title>
+<meta name="description" content="Publish the Ops Monitor stack at map.csprint.co.th through the host's existing Cloudflare Tunnel connector — no public IP, no second connector, no certbot.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -28,31 +28,37 @@
     <div class="badge-row">
       <span class="pill"><span class="dot"></span> Cloudflare Tunnel</span>
       <span class="pill">Docker Compose</span>
-      <span class="pill">Ubuntu 24.04 VPS</span>
+      <span class="pill">Ubuntu 24.04</span>
       <span class="pill">nginx</span>
-      <span class="pill">Zero open ports</span>
+      <span class="pill">No public IP needed</span>
     </div>
 
     <h1>Production deploy — Docker Compose behind a Cloudflare Tunnel</h1>
     <p>
-      Put the full stack on a VPS and expose it at a real hostname without opening
-      port 80 or 443, without a public IP, and without ever running certbot.
+      The deploy host has <b>no public IP</b>, so there is nothing to forward a port
+      to. It already runs a
       <code class="inline" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#e8eff8">cloudflared</code>
-      dials <em>out</em> to Cloudflare; nothing dials in.
+      connector for other services, and this stack <b>reuses it</b> — no second
+      connector, no tunnel token here, no certbot, and the command never grows flags:
+      <code class="inline" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#e8eff8">docker compose up -d --build</code>.
     </p>
 
     <!-- Fill these once; every command below rewrites itself. -->
     <div class="configbar">
       <div class="f">
-        <label for="f-domain">Your hostname</label>
-        <input id="f-domain" data-field="domain" spellcheck="false" autocomplete="off" placeholder="ops.example.com">
+        <label for="f-domain">Published hostname</label>
+        <input id="f-domain" data-field="domain" spellcheck="false" autocomplete="off" placeholder="map.csprint.co.th">
       </div>
       <div class="f">
-        <label for="f-tunnel">Tunnel name</label>
-        <input id="f-tunnel" data-field="tunnel" spellcheck="false" autocomplete="off" placeholder="ops-monitor">
+        <label for="f-network">Connector&rsquo;s network</label>
+        <input id="f-network" data-field="network" spellcheck="false" autocomplete="off" placeholder="hms-network">
       </div>
       <div class="f">
-        <label for="f-user">VPS sudo user</label>
+        <label for="f-lan">Host LAN address</label>
+        <input id="f-lan" data-field="lan" spellcheck="false" autocomplete="off" placeholder="192.168.1.50">
+      </div>
+      <div class="f">
+        <label for="f-user">Host sudo user</label>
         <input id="f-user" data-field="user" spellcheck="false" autocomplete="off" placeholder="deploy">
       </div>
       <div class="f">
@@ -60,7 +66,7 @@
         <input id="f-dir" data-field="dir" spellcheck="false" autocomplete="off" placeholder="ops-monitor">
       </div>
       <p class="hint">
-        Typed here, substituted everywhere — saved in your browser so it survives a reload.
+        Typed once, substituted into every command below &mdash; saved in your browser.
       </p>
     </div>
   </div>
@@ -77,13 +83,13 @@
     <a href="#prereq">2 · Prerequisites</a>
     <a href="#docker">3 · Install Docker</a>
     <a href="#code">4 · Code &amp; .env</a>
-    <a href="#compose">5 · Compose changes</a>
+    <a href="#compose">5 · Join the connector</a>
     <a href="#nginx">6 · nginx changes</a>
-    <a href="#tunnel">7 · Create the tunnel</a>
+    <a href="#tunnel">7 · Map the hostname</a>
     <a href="#dns">8 · DNS</a>
     <a href="#run">9 · First run</a>
     <a href="#google">10 · Google sign-in</a>
-    <a href="#firewall">11 · Lock the firewall</a>
+    <a href="#firewall">11 · Firewall</a>
     <a href="#verify">12 · Verify</a>
     <a href="#harden">13 · Cloudflare hardening</a>
     <a href="#ops">14 · Day-2 operations</a>
@@ -93,38 +99,15 @@
 
   <main>
 
-    <!-- ── SUPERSEDED NOTICE ─────────────────────────────────────────────── -->
-    <section id="superseded" style="border-color:var(--bad);border-left:4px solid var(--bad)">
-      <h2 style="color:var(--bad)">⚠ Partly superseded — do not follow §5 or §7 yet</h2>
-      <p class="lead" style="margin-bottom:0">
-        This guide was written assuming this stack runs <b>its own</b>
-        <code class="inline">cloudflared</code> connector. That is no longer the plan.
-        The deploy host <b>already runs a Cloudflare Tunnel connector</b>, and the
-        decision taken since was to <b>reuse it</b>: this project adds no
-        <code class="inline">cloudflared</code> service and holds no tunnel token.
-        Its nginx instead joins the network that connector is already on, declared
-        as an external network, and <code class="inline">map.csprint.co.th</code> is
-        added as a Public Hostname on the <b>existing</b> tunnel pointing at this
-        project's nginx container.
-      </p>
-      <p style="margin-bottom:0">
-        Sections <b>5 (Compose changes)</b> and <b>7 (Create the tunnel)</b> are
-        therefore wrong as written. Everything else — architecture, host prep,
-        nginx, DNS, first run, Google sign-in, verification, hardening, day-2 ops,
-        troubleshooting — still applies. See
-        <code class="inline">docs/specs/publish-via-cloudflare-tunnel.md</code> for
-        the decisions of record; this page is rewritten once the deployment is
-        verified, so that it documents what was actually shipped.
-      </p>
-    </section>
-
     <!-- ── WHY ───────────────────────────────────────────────────────────── -->
     <section id="why">
       <h2>Why a tunnel instead of open ports</h2>
       <p class="lead">
         <code class="inline">docs/how-to-deploy.md</code> covers the classic route:
-        publish port 80/443 and issue a Let's Encrypt certificate. This guide replaces
-        that edge entirely. Both end at the same four containers.
+        publish port 80/443 and issue a Let's Encrypt certificate. <b>That route is not
+        available here</b> — this host holds no public IP, so there is no inbound
+        reachability to forward. The comparison is kept because it explains what the
+        tunnel buys beyond solving that.
       </p>
 
       <table>
@@ -139,7 +122,7 @@
           </tr>
           <tr>
             <td><b>Public IP</b></td>
-            <td>Required</td>
+            <td><span class="tag no">Required</span> — we don't have one</td>
             <td>Not required — works behind NAT/CGNAT</td>
           </tr>
           <tr>
@@ -164,7 +147,7 @@
           </tr>
           <tr>
             <td><b>Dependency</b></td>
-            <td>None beyond your VPS</td>
+            <td>None beyond your host</td>
             <td><span class="tag no">Cloudflare</span> — they are now in your critical path</td>
           </tr>
           <tr>
@@ -187,106 +170,108 @@
     <section id="arch">
       <h2><span class="stepnum cf">1</span> Architecture</h2>
       <p class="lead">
-        Five containers on a private <code class="inline">opsnet</code> bridge.
-        <b>Nothing is published to the host.</b> <code class="inline">cloudflared</code>
-        holds a persistent outbound connection to Cloudflare's edge and forwards
-        requests to <code class="inline">nginx:80</code> over the Docker network.
+        This project owns <b>four</b> containers on its private
+        <code class="inline">opsnet</code> bridge. The fifth box below —
+        <code class="inline">cloudflared</code> — is <b>not ours</b>: it already runs on
+        this host for other services. Our nginx joins that connector's network
+        (<code class="inline"><span class="v" data-var="network"></span></code>) so it
+        can be reached, and the connector forwards to it by container name.
       </p>
 
       <div class="diagram">
-        <svg viewBox="0 0 760 300" role="img" aria-label="Request flow from browser through Cloudflare edge and cloudflared into nginx, backend, frontend and Postgres">
-          <defs>
-            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0 10 5 0 10z" fill="#56636f"/>
-            </marker>
-            <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0 10 5 0 10z" fill="#f6821f"/>
-            </marker>
-          </defs>
+        <svg viewBox="0 0 780 320" role="img" aria-label="Request flow from browser through the Cloudflare edge and the host's existing cloudflared connector into this project's nginx, frontend, backend and Postgres">
           <style>
-            .bx{fill:#fff;stroke:#e2e6ec;stroke-width:1.4;rx:9}
+            .bx{fill:#fff;stroke:#e2e6ec;stroke-width:1.4}
             .lb{font:600 12px 'IBM Plex Sans Thai',sans-serif;fill:#16202b}
             .sm{font:11px 'IBM Plex Mono',monospace;fill:#8a96a3}
-            .ln{stroke:#56636f;stroke-width:1.5;fill:none;marker-end:url(#a)}
-            .lo{stroke:#f6821f;stroke-width:2;fill:none;marker-end:url(#ao)}
+            .ln{stroke:#56636f;stroke-width:1.5;fill:none}
+            .lo{stroke:#f6821f;stroke-width:2;fill:none;stroke-dasharray:5 3}
           </style>
 
-          <!-- browser -->
-          <rect class="bx" x="14" y="118" width="104" height="52"/>
-          <text class="lb" x="66" y="140" text-anchor="middle">Browser</text>
-          <text class="sm" x="66" y="156" text-anchor="middle">HTTPS</text>
+          <rect class="bx" x="12" y="132" width="96" height="50" rx="9"/>
+          <text class="lb" x="60" y="153" text-anchor="middle">Browser</text>
+          <text class="sm" x="60" y="169" text-anchor="middle">HTTPS</text>
 
-          <!-- cloudflare edge -->
-          <rect class="bx" x="152" y="110" width="122" height="68" style="fill:#fdf1e3;stroke:#f6821f"/>
-          <text class="lb" x="213" y="134" text-anchor="middle">Cloudflare</text>
-          <text class="lb" x="213" y="150" text-anchor="middle">edge</text>
-          <text class="sm" x="213" y="166" text-anchor="middle">TLS + WAF</text>
+          <rect x="128" y="124" width="112" height="66" rx="9" style="fill:#fdf1e3;stroke:#f6821f;stroke-width:1.4"/>
+          <text class="lb" x="184" y="147" text-anchor="middle">Cloudflare</text>
+          <text class="lb" x="184" y="162" text-anchor="middle">edge</text>
+          <text class="sm" x="184" y="178" text-anchor="middle">TLS + WAF</text>
 
-          <!-- VPS boundary -->
-          <rect x="308" y="18" width="438" height="266" rx="12" fill="none" stroke="#8a96a3" stroke-width="1.3" stroke-dasharray="5 4"/>
-          <text class="sm" x="322" y="36">VPS — no inbound ports open</text>
+          <rect x="272" y="16" width="496" height="292" rx="12" fill="none" stroke="#8a96a3" stroke-width="1.3" stroke-dasharray="5 4"/>
+          <text class="sm" x="286" y="34">Host — no public IP, no inbound ports</text>
 
-          <!-- cloudflared -->
-          <rect class="bx" x="326" y="112" width="106" height="64" style="fill:#fdf1e3;stroke:#f6821f"/>
-          <text class="lb" x="379" y="136" text-anchor="middle">cloudflared</text>
-          <text class="sm" x="379" y="152" text-anchor="middle">outbound</text>
-          <text class="sm" x="379" y="166" text-anchor="middle">only</text>
+          <rect x="288" y="124" width="112" height="66" rx="9" style="fill:#fdf1e3;stroke:#f6821f;stroke-width:1.4"/>
+          <text class="lb" x="344" y="147" text-anchor="middle">cloudflared</text>
+          <text class="sm" x="344" y="163" text-anchor="middle">EXISTING</text>
+          <text class="sm" x="344" y="177" text-anchor="middle">not ours</text>
 
-          <!-- nginx -->
-          <rect class="bx" x="464" y="112" width="94" height="64"/>
-          <text class="lb" x="511" y="139" text-anchor="middle">nginx</text>
-          <text class="sm" x="511" y="156" text-anchor="middle">:80</text>
+          <rect x="424" y="52" width="336" height="240" rx="10" fill="none" stroke="#f6821f" stroke-width="1.1" stroke-dasharray="3 3"/>
+          <text class="sm" x="436" y="68" fill="#f6821f">ops-monitor (this project)</text>
 
-          <!-- frontend -->
-          <rect class="bx" x="596" y="52" width="134" height="52"/>
-          <text class="lb" x="663" y="74" text-anchor="middle">frontend</text>
-          <text class="sm" x="663" y="90" text-anchor="middle">SPA · static</text>
+          <rect class="bx" x="440" y="124" width="92" height="66" rx="9"/>
+          <text class="lb" x="486" y="150" text-anchor="middle">nginx</text>
+          <text class="sm" x="486" y="167" text-anchor="middle">:80</text>
 
-          <!-- backend -->
-          <rect class="bx" x="596" y="122" width="134" height="52"/>
-          <text class="lb" x="663" y="144" text-anchor="middle">backend</text>
-          <text class="sm" x="663" y="160" text-anchor="middle">Bun · :3000</text>
+          <rect class="bx" x="576" y="82" width="168" height="48" rx="9"/>
+          <text class="lb" x="660" y="102" text-anchor="middle">frontend</text>
+          <text class="sm" x="660" y="118" text-anchor="middle">SPA · static</text>
 
-          <!-- db -->
-          <rect class="bx" x="596" y="196" width="134" height="52"/>
-          <text class="lb" x="663" y="218" text-anchor="middle">db</text>
-          <text class="sm" x="663" y="234" text-anchor="middle">Postgres :5432</text>
+          <rect class="bx" x="576" y="146" width="168" height="48" rx="9"/>
+          <text class="lb" x="660" y="166" text-anchor="middle">backend</text>
+          <text class="sm" x="660" y="182" text-anchor="middle">Bun · :3000</text>
 
-          <!-- arrows -->
-          <path class="ln" d="M120 144 H148"/>
-          <path class="lo" d="M376 108 V70 H286 V106" transform="translate(0,0)"/>
-          <text class="sm" x="300" y="62" fill="#f6821f">dials out ↑</text>
-          <path class="ln" d="M434 144 H460"/>
-          <path class="ln" d="M560 138 H576 V80 H592"/>
-          <path class="ln" d="M560 148 H592"/>
-          <path class="ln" d="M663 176 V192"/>
-          <text class="sm" x="576" y="72">/</text>
-          <text class="sm" x="570" y="132">/api</text>
+          <rect class="bx" x="576" y="212" width="168" height="48" rx="9"/>
+          <text class="lb" x="660" y="232" text-anchor="middle">db</text>
+          <text class="sm" x="660" y="248" text-anchor="middle">Postgres :5432</text>
+
+          <path class="ln" d="M110 157 H124"/>
+          <path class="lo" d="M344 120 V84 H208 V120"/>
+          <text class="sm" x="228" y="78" fill="#f6821f">dials out (no inbound)</text>
+          <path class="ln" d="M402 157 H436"/>
+          <text class="sm" x="404" y="150" fill="#f6821f">shared net</text>
+          <path class="ln" d="M534 148 H556 V106 H572"/>
+          <path class="ln" d="M534 163 H572"/>
+          <path class="ln" d="M660 196 V208"/>
+          <text class="sm" x="546" y="100">/</text>
+          <text class="sm" x="538" y="180">/api</text>
+
+          <path class="ln" d="M486 190 V266 H420" stroke-dasharray="4 3"/>
+          <text class="sm" x="330" y="270">LAN :80 (debug path)</text>
         </svg>
       </div>
 
       <div class="cards">
-        <div class="card"><div class="k">Published ports</div><div class="v">0 <small>— none</small></div></div>
-        <div class="card"><div class="k">Certificates on VPS</div><div class="v">0 <small>— none</small></div></div>
-        <div class="card"><div class="k">Containers</div><div class="v">5 <small>+ cloudflared</small></div></div>
-        <div class="card"><div class="k">Volumes</div><div class="v">2 <small>pgdata · uploads</small></div></div>
+        <div class="card"><div class="k">Containers we run</div><div class="v">4 <small>+ 1 reused</small></div></div>
+        <div class="card"><div class="k">Tunnel tokens here</div><div class="v">0 <small>— none</small></div></div>
+        <div class="card"><div class="k">Certificates on host</div><div class="v">0 <small>— none</small></div></div>
+        <div class="card"><div class="k">Published ports</div><div class="v">80 <small>LAN only</small></div></div>
       </div>
 
       <p>
-        nginx keeps its job unchanged: <code class="inline">/api/</code> and
+        nginx's job is unchanged: <code class="inline">/api/</code> and
         <code class="inline">/uploads/</code> to <code class="inline">backend:3000</code>,
         everything else to <code class="inline">frontend:80</code>. The SPA calls a
-        <b>relative</b> <code class="inline">/api</code>, so there is still no
-        build-time API URL to configure.
+        <b>relative</b> <code class="inline">/api</code>, so there is no build-time API
+        URL to configure.
       </p>
+
+      <div class="note">
+        <b>Why port 80 is still published.</b> With no public IP it reaches the office
+        LAN only, and it is how you diagnose the app when the tunnel is down. On a host
+        that <em>does</em> hold a public IP this must be deleted — it would bypass every
+        Cloudflare protection below.
+      </div>
     </section>
 
     <!-- ── PREREQ ────────────────────────────────────────────────────────── -->
     <section id="prereq">
       <h2><span class="stepnum">2</span> Prerequisites</h2>
       <ul>
-        <li>A VPS running <b>Ubuntu 24.04 LTS</b> with a sudo-capable user
+        <li>A host running <b>Ubuntu 24.04 LTS</b> with a sudo-capable user
           (<code class="inline"><span class="v" data-var="user"></span></code>) — don't deploy as root.</li>
+        <li>That host <b>already running a healthy cloudflared connector</b>, on a Docker
+          network this project can join. <code class="inline">scripts/preflight.sh</code>
+          reports both.</li>
         <li><b>~2 GB RAM.</b> Postgres + Bun + two nginx + cloudflared. 1 GB will build but may OOM during <code class="inline">bun install</code>.</li>
         <li>Outbound access on <b>TCP/UDP 7844</b> to Cloudflare — QUIC preferred, falls back to HTTPS. Most VPS providers allow this by default.</li>
         <li>A <b>domain on a Cloudflare account</b>, with its nameservers already pointed at Cloudflare (the zone must be Active).</li>
@@ -361,9 +346,11 @@ echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
       <div class="code-card">
         <div class="code-head"><span class="fn">.env</span><span class="lang">env</span><button class="copy">Copy</button></div>
 <pre><span class="c"># ── Public origin ─────────────────────────────────────────────</span>
-<span class="c"># MUST be https and MUST NOT have a trailing slash. This value drives</span>
-<span class="c"># the Google OAuth redirect_uri and the secure flag on the state cookie.</span>
-<span class="k">FRONTEND_URL</span>=<span class="s">https://{{domain}}</span>
+<span class="c"># No trailing slash. Drives the Google OAuth redirect_uri and the</span>
+<span class="c"># secure flag on the OAuth state cookie. THIS is what switches phase:</span>
+<span class="c">#   Phase 1 (LAN):       http://{{lan}}</span>
+<span class="c">#   Phase 2 (published): https://{{domain}}</span>
+<span class="k">FRONTEND_URL</span>=<span class="s">http://{{lan}}</span>
 
 <span class="c"># ── Database ──────────────────────────────────────────────────</span>
 <span class="k">POSTGRES_DB</span>=<span class="s">opsmonitor</span>
@@ -374,9 +361,8 @@ echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
 <span class="k">JWT_SECRET</span>=<span class="s">&lt;paste the generated value&gt;</span>
 
 <span class="c"># ── Cloudflare Tunnel ─────────────────────────────────────────</span>
-<span class="c"># From the Zero Trust dashboard in §7. Treat it like a password:</span>
-<span class="c"># anyone holding it can serve traffic on your hostname.</span>
-<span class="k">CLOUDFLARE_TUNNEL_TOKEN</span>=<span class="s">&lt;paste the tunnel token&gt;</span>
+<span class="c"># Nothing to set. This stack runs no cloudflared of its own and</span>
+<span class="c"># holds no tunnel token — it reuses the host's existing connector.</span>
 
 <span class="c"># ── Google sign-in (optional — blank disables the feature) ────</span>
 <span class="k">GOOGLE_CLIENT_ID</span>=
@@ -413,17 +399,11 @@ echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
 
     <!-- ── COMPOSE ───────────────────────────────────────────────────────── -->
     <section id="compose">
-      <h2><span class="stepnum cf">5</span> Compose: unpublish nginx, add <code class="inline">cloudflared</code></h2>
+      <h2><span class="stepnum cf">5</span> Join the connector's network</h2>
       <p class="lead">
-        Two edits to <code class="inline">docker-compose.yml</code>. Keep everything
-        else exactly as it is.
-      </p>
-
-      <h3>5.1 — Remove the published port from nginx</h3>
-      <p>
-        This is the edit that actually closes the door. With a tunnel, publishing 80
-        to the host is not just unnecessary — it is a bypass around every Cloudflare
-        protection you are about to configure.
+        One edit to <code class="inline">docker-compose.yml</code>: nginx joins the
+        network the existing connector is already on. There is <b>no</b>
+        <code class="inline">cloudflared</code> service to add.
       </p>
 
       <div class="code-card">
@@ -431,223 +411,168 @@ echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
 <pre>  nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
-    <span class="c"># ports:                    ← DELETE this block entirely.</span>
-    <span class="c">#   - "80:80"                  cloudflared reaches nginx over opsnet,</span>
-    <span class="c">#                              not through the host.</span>
+    ports:
+      <span class="c"># Kept deliberately: no public IP, so this is LAN-only and stays the</span>
+      <span class="c"># way in when the tunnel is down. DELETE on a host with a public IP.</span>
+      - "80:80"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on: [frontend, backend]
-    networks: [opsnet]</pre>
+    networks: [opsnet, {{network}}]</pre>
       </div>
-
-      <h3>5.2 — Add the <code class="inline">cloudflared</code> service</h3>
 
       <div class="code-card">
-        <div class="code-head"><span class="fn">docker-compose.yml — append under services:</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
-<pre>  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    <span class="c"># --no-autoupdate: the image is the update mechanism; let Compose pull it.</span>
-    command: tunnel --no-autoupdate --loglevel info run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
-      <span class="c"># Metrics endpoint for the health probe below.</span>
-      TUNNEL_METRICS: 0.0.0.0:2000
-    depends_on: [nginx]
-    networks: [opsnet]
-    healthcheck:
-      test: ["CMD", "cloudflared", "--version"]
-      interval: 30s
-      timeout: 5s
-      retries: 3</pre>
+        <div class="code-head"><span class="fn">docker-compose.yml — networks block</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
+<pre>networks:
+  opsnet:
+
+  <span class="c"># Created and owned by the stack that runs this host's cloudflared,</span>
+  <span class="c"># NOT by this file. external: true means "attach, don't create".</span>
+  {{network}}:
+    external: true</pre>
       </div>
 
-      <div class="note">
-        <b>Why <code class="inline">TUNNEL_TOKEN</code> as an environment variable
-        rather than <code class="inline">--token</code> on the command line?</b>
-        A token passed as an argument shows up in <code class="inline">docker inspect</code>,
-        <code class="inline">ps aux</code> on the host, and your shell history.
-        The env var is still readable by anyone who can run Docker, but it stops
-        leaking into process listings.
+      <div class="warn">
+        <b>This is a dependency on a project outside this repository.</b> If that stack
+        is torn down or renames the network, <code class="inline">docker compose up</code>
+        here fails with <code class="inline">network <span class="v" data-var="network"></span>
+        declared as external, but could not be found</code> until this file is edited.
+        That was the accepted trade for not running a second connector and not modifying
+        a project this repo does not own.
+      </div>
+
+      <h3>Confirm the network name first</h3>
+      <p>
+        Don't take <code class="inline"><span class="v" data-var="network"></span></code>
+        on faith — read it off the running connector:
+      </p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the host</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+  $(docker ps --format '{{.ID}} {{.Image}}' | grep -i cloudflared | awk '{print $1}')
+
+<span class="c"># scripts/preflight.sh reports the same thing, with more context.</span></pre>
       </div>
 
       <div class="tip">
-        <b>Prefer config files over a dashboard token?</b> See §7 <i>Option B</i> —
-        a locally-managed tunnel with <code class="inline">config.yml</code> and a
-        credentials JSON, mounted read-only. It keeps routing in git; it also means
-        the dashboard can't change your routes.
+        <b>No override file, no <code class="inline">COMPOSE_FILE</code>, no
+        <code class="inline">-f</code>.</b> Because nothing about the topology differs
+        between phases, one compose file covers both and the command stays
+        <code class="inline">docker compose up -d --build</code> forever. Phase is
+        expressed entirely by <code class="inline">FRONTEND_URL</code> and whether the
+        hostname is mapped in the dashboard.
       </div>
     </section>
 
     <!-- ── NGINX ─────────────────────────────────────────────────────────── -->
     <section id="nginx">
-      <h2><span class="stepnum">6</span> nginx: real client IPs and the right scheme</h2>
+      <h2><span class="stepnum">6</span> nginx: real client IPs and the forwarded scheme</h2>
       <p class="lead">
-        Behind a tunnel, every request arrives from the <code class="inline">cloudflared</code>
-        container's Docker IP over plain HTTP. Two headers need fixing or your logs
-        lie to you and the backend thinks it's on <code class="inline">http</code>.
+        Behind the tunnel, every request arrives from the connector's container IP over
+        plain HTTP. Two directives fix what that hides. <b>Both are already committed</b>
+        in <code class="inline">nginx/conf.d/default.conf</code> — this section explains
+        them so the reasoning survives.
       </p>
 
       <div class="code-card">
-        <div class="code-head"><span class="fn">nginx/conf.d/default.conf</span><span class="lang">nginx</span><button class="copy">Copy</button></div>
-<pre><span class="c"># Cloudflare puts the true client IP here; cloudflared forwards it.</span>
-<span class="c"># Trust it only from the Docker bridge ranges — never from the internet.</span>
+        <div class="code-head"><span class="fn">nginx/conf.d/default.conf — http context</span><span class="lang">nginx</span><button class="copy">Copy</button></div>
+<pre><span class="c"># Cloudflare puts the true visitor IP in CF-Connecting-IP. Trust it ONLY</span>
+<span class="c"># from the Docker bridge ranges the connector can occupy.</span>
+<span class="c">#</span>
+<span class="c"># 192.168.0.0/16 is deliberately NOT trusted: port 80 stays published on</span>
+<span class="c"># the office LAN, which lives in that range, so trusting it would let any</span>
+<span class="c"># staff machine forge its own logged address — the very thing this guards.</span>
 set_real_ip_from 10.0.0.0/8;
 set_real_ip_from 172.16.0.0/12;
-set_real_ip_from 192.168.0.0/16;
 real_ip_header CF-Connecting-IP;
 real_ip_recursive on;
 
-<span class="c"># The edge terminated TLS, so $scheme here is "http" and would be wrong.</span>
-<span class="c"># Trust the forwarded value, falling back to $scheme for local curl tests.</span>
+<span class="c"># The edge terminates TLS, so $scheme here is always "http". Forward the</span>
+<span class="c"># scheme the client actually used rather than the one we observed.</span>
 map $http_x_forwarded_proto $fwd_proto {
     default $scheme;
     https   https;
     http    http;
-}
-
-server {
-    listen 80;
-    server_name _;                <span class="c"># the tunnel decides the hostname</span>
-
-    client_max_body_size 12m;     <span class="c"># floor-plan uploads up to 10 MB</span>
-
-    gzip on;
-    gzip_comp_level 5;
-    gzip_types text/css application/javascript application/json image/svg+xml;
-
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-
-    location /api/ {
-        proxy_pass http://backend:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $fwd_proto;   <span class="c"># ← was $scheme</span>
-        proxy_read_timeout 60s;
-    }
-
-    location /uploads/ {
-        proxy_pass http://backend:3000;
-        proxy_set_header Host $host;
-        expires 7d;
-        add_header Cache-Control "public";
-    }
-
-    location / {
-        proxy_pass http://frontend:80;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $fwd_proto;   <span class="c"># ← was $scheme</span>
-    }
 }</pre>
       </div>
 
+      <div class="note">
+        <b>Be precise about what the scheme map does and doesn't fix.</b> Nothing in the
+        backend reads <code class="inline">X-Forwarded-Proto</code> today — the Google
+        <code class="inline">redirect_uri</code> and the OAuth state cookie's
+        <code class="inline">secure</code> flag both derive from
+        <code class="inline">FRONTEND_URL</code>. This is hygiene, not a fix for a live
+        bug. And unlike <code class="inline">CF-Connecting-IP</code> above, the value is
+        accepted from <em>any</em> client; that is tolerable only while nothing consumes
+        it. Guard it before anything does.
+      </div>
+
+      <p>
+        Inside the server block, both proxy locations pass
+        <code class="inline">proxy_set_header X-Forwarded-Proto $fwd_proto;</code> instead
+        of <code class="inline">$scheme</code>. There is no
+        <code class="inline">443</code> block and no certificate on this host: the edge
+        terminates TLS and the connector delivers plain HTTP to port 80.
+      </p>
+
       <div class="tip">
-        <b>Delete the commented-out 443 block</b> at the bottom of the existing file.
-        With a tunnel there is no certificate on this box and that block can only
-        ever mislead the next person to read it.
+        <b>Validate before restarting</b> — a bad config stops nginx from coming back:
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the host</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>docker run --rm -v "$PWD/nginx/conf.d:/etc/nginx/conf.d:ro" nginx:1.27-alpine nginx -t</pre>
       </div>
     </section>
 
     <!-- ── TUNNEL ────────────────────────────────────────────────────────── -->
     <section id="tunnel">
-      <h2><span class="stepnum cf">7</span> Create the tunnel</h2>
+      <h2><span class="stepnum cf">7</span> Map the hostname on the existing tunnel</h2>
       <p class="lead">
-        Two ways. <b>Option A</b> (dashboard) is faster and self-heals if you change
-        routes. <b>Option B</b> (CLI) keeps routing in version control. Pick one.
+        No tunnel is created here and no token is copied anywhere. You are adding one
+        Public Hostname to the connector this host already runs.
       </p>
 
-      <h3>Option A — remotely-managed, via the Zero Trust dashboard</h3>
       <ol>
         <li>Go to <a href="https://one.dash.cloudflare.com" target="_blank" rel="noopener">one.dash.cloudflare.com</a>
-          → <b>Networks</b> → <b>Tunnels</b> → <b>Create a tunnel</b>.</li>
-        <li>Choose <b>Cloudflared</b> as the connector type.</li>
-        <li>Name it <code class="inline"><span class="v" data-var="tunnel"></span></code> → <b>Save</b>.</li>
-        <li>On the install screen, ignore the install commands — <b>copy the token</b>
-          (the long string after <code class="inline">--token</code>) into
-          <code class="inline">CLOUDFLARE_TUNNEL_TOKEN</code> in your
-          <code class="inline">.env</code>.</li>
-        <li>Open the <b>Public Hostnames</b> tab → <b>Add a public hostname</b>:</li>
+          → <b>Networks</b> → <b>Tunnels</b>.</li>
+        <li>Open the tunnel that is <b>already running</b> on this host — the one
+          <code class="inline">scripts/preflight.sh</code> reported, showing status
+          <b>HEALTHY</b>.</li>
+        <li>Open the <b>Public Hostnames</b> tab → <b>Add a public hostname</b>.</li>
       </ol>
 
       <table>
         <thead><tr><th>Field</th><th>Value</th></tr></thead>
         <tbody>
-          <tr><td>Subdomain</td><td><code>ops</code> <span class="small">(whatever is left of your zone)</span></td></tr>
-          <tr><td>Domain</td><td>your zone, e.g. <code>example.com</code></td></tr>
+          <tr><td>Subdomain</td><td><code>map</code></td></tr>
+          <tr><td>Domain</td><td><code>csprint.co.th</code></td></tr>
           <tr><td>Path</td><td><i>leave empty</i></td></tr>
-          <tr><td>Type</td><td><code>HTTP</code></td></tr>
-          <tr><td>URL</td><td><code>nginx:80</code> &nbsp;<span class="tag opt">container name, not localhost</span></td></tr>
+          <tr><td>Type</td><td><code>HTTP</code> <span class="small">(not HTTPS — there is no certificate on the origin)</span></td></tr>
+          <tr><td>URL</td><td><code>ops-monitor-nginx-1:80</code> &nbsp;<span class="tag opt">container name</span></td></tr>
         </tbody>
       </table>
 
       <div class="warn">
         <b>The single most common mistake:</b> entering
-        <code class="inline">localhost:80</code> or <code class="inline">127.0.0.1:80</code>
-        as the service URL. Inside the <code class="inline">cloudflared</code> container,
+        <code class="inline">localhost:80</code> or <code class="inline">127.0.0.1:80</code>.
+        Inside the <code class="inline">cloudflared</code> container,
         <code class="inline">localhost</code> is <em>that container</em> — not nginx,
-        not the host. It must be <code class="inline">nginx:80</code>, resolved by
-        Docker's DNS on the shared <code class="inline">opsnet</code> network. This is
-        also why <code class="inline">cloudflared</code> must be on
-        <code class="inline">networks: [opsnet]</code>.
+        not the host. It must be the container name, resolved by Docker's DNS on the
+        shared network, which is exactly what §5 arranged.
       </div>
 
-      <p>Saving the public hostname <b>creates the DNS record for you</b> — §8 is then just verification.</p>
-
-      <hr>
-
-      <h3>Option B — locally-managed, config in git</h3>
-
-      <div class="code-card">
-        <div class="code-head"><span class="fn">on the VPS — one-time, interactive</span><span class="lang">bash</span><button class="copy">Copy</button></div>
-<pre><span class="c"># Authenticate: prints a URL, opens a browser, pick your zone.</span>
-<span class="c"># Writes ~/.cloudflared/cert.pem</span>
-docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
-  cloudflare/cloudflared:latest tunnel login
-
-<span class="c"># Create the tunnel — writes ~/.cloudflared/&lt;TUNNEL-ID&gt;.json</span>
-docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
-  cloudflare/cloudflared:latest tunnel create {{tunnel}}
-
-<span class="c"># Route DNS at it (creates the proxied CNAME)</span>
-docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
-  cloudflare/cloudflared:latest tunnel route dns {{tunnel}} {{domain}}</pre>
+      <div class="note">
+        <b>Where <code class="inline">ops-monitor-nginx-1</code> comes from.</b>
+        <code class="inline">docker-compose.yml</code> declares
+        <code class="inline">name: ops-monitor</code>, and Compose names containers
+        <code class="inline">&lt;project&gt;-&lt;service&gt;-&lt;n&gt;</code>. Confirm with
+        <code class="inline">docker compose ps --format '{{.Name}}'</code> rather than
+        assuming.
       </div>
 
-      <div class="code-card">
-        <div class="code-head"><span class="fn">cloudflared/config.yml</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
-<pre>tunnel: &lt;TUNNEL-ID&gt;
-credentials-file: /etc/cloudflared/&lt;TUNNEL-ID&gt;.json
-
-ingress:
-  - hostname: {{domain}}
-    service: http://nginx:80
-  <span class="c"># Catch-all is REQUIRED and must be last, or cloudflared won't start.</span>
-  - service: http_status:404</pre>
-      </div>
-
-      <div class="code-card">
-        <div class="code-head"><span class="fn">docker-compose.yml — Option B variant</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
-<pre>  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
-    volumes:
-      - ./cloudflared:/etc/cloudflared:ro
-    depends_on: [nginx]
-    networks: [opsnet]</pre>
-      </div>
-
-      <div class="danger">
-        <b>Add <code class="inline">cloudflared/*.json</code> to
-        <code class="inline">.gitignore</code>.</b> The credentials file is the
-        tunnel's private key. Committing it hands anyone with repo access the ability
-        to serve traffic on your hostname.
-      </div>
+      <p>Saving the Public Hostname <b>creates the DNS record for you</b> — §8 is verification, not creation.</p>
     </section>
 
     <!-- ── DNS ───────────────────────────────────────────────────────────── -->
@@ -702,42 +627,62 @@ ingress:
 
     <!-- ── RUN ───────────────────────────────────────────────────────────── -->
     <section id="run">
-      <h2><span class="stepnum">9</span> First run</h2>
+      <h2><span class="stepnum">9</span> First run — phase 1, on the LAN</h2>
+      <p class="lead">
+        Prove the application works before publishing it, so that a later failure is
+        unambiguously a tunnel fault rather than an app fault.
+      </p>
 
       <div class="code-card">
-        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+        <div class="code-head"><span class="fn">on the host</span><span class="lang">bash</span><button class="copy">Copy</button></div>
 <pre>cd ~/{{dir}}
 
-<span class="c"># Build the two app images and start all five services</span>
-docker compose up -d --build
+<span class="c"># Fails immediately and loudly if the external network name is wrong</span>
+docker compose config --quiet &amp;&amp; echo "compose OK"
 
-<span class="c"># Watch them come up — cloudflared should log "Registered tunnel connection"</span>
-docker compose ps
-docker compose logs -f cloudflared</pre>
+docker compose up -d --build
+docker compose ps</pre>
       </div>
 
       <p>The database starts <b>completely empty</b> — no tables, no users. Create both:</p>
 
       <div class="code-card">
         <div class="code-head"><span class="fn">schema + first admin</span><span class="lang">bash</span><button class="copy">Copy</button></div>
-<pre><span class="c"># Create the tables (drizzle-kit push)</span>
-docker compose exec backend bun run db:push
+<pre>docker compose exec backend bun run db:push
 
-<span class="c"># Create exactly one admin user — no demo data</span>
 docker compose exec \
   -e ADMIN_EMAIL=you@company.com \
   -e ADMIN_PASSWORD='a-long-unique-password' \
   backend bun run db:seed:admin</pre>
       </div>
 
+      <p>
+        Now open <code class="inline">http://<span class="v" data-var="lan"></span></code>
+        from a machine on the office network and verify the whole path end to end:
+      </p>
+
+      <ul>
+        <li>sign in with the admin you just created</li>
+        <li>the Device inventory lists and filters</li>
+        <li>a floor-plan image uploads and its pins place</li>
+        <li>per-property permissions behave — a viewer sees read-only affordances</li>
+      </ul>
+
       <div class="danger">
         <b>Never run <code class="inline">bun run db:seed</code> here.</b> It
-        <b>deletes every row in every table</b> and loads prototype demo data. It
-        refuses under <code class="inline">NODE_ENV=production</code> (which the
-        backend Dockerfile sets), and the demo bundle it needs
-        (<code class="inline">_extracted/</code>) is gitignored — two guards you
+        <b>deletes every row in every table</b> and loads prototype demo data. It refuses
+        under <code class="inline">NODE_ENV=production</code> (which the backend
+        Dockerfile sets) and the demo bundle it needs is gitignored — two guards you
         should not go looking for a way around.
         <code class="inline">db:seed:admin</code> is the production command.
+      </div>
+
+      <div class="tip">
+        <b>Phase 2</b> is then only: set
+        <code class="inline">FRONTEND_URL=https://<span class="v" data-var="domain"></span></code>
+        in <code class="inline">.env</code>, run
+        <code class="inline">docker compose up -d</code> again, and add the Public
+        Hostname from §7. No compose edit, no new flags.
       </div>
     </section>
 
@@ -788,41 +733,44 @@ docker compose exec \
 
     <!-- ── FIREWALL ──────────────────────────────────────────────────────── -->
     <section id="firewall">
-      <h2><span class="stepnum">11</span> Close the firewall</h2>
+      <h2><span class="stepnum">11</span> Firewall</h2>
       <p class="lead">
-        The tunnel is only a security win if the front door is actually locked. Nothing
-        needs to reach this box from the internet except SSH.
+        With no public IP there is no inbound path from the internet to close — the
+        router already is the boundary. What is worth doing is limiting what the office
+        LAN can reach.
       </p>
 
+      <div class="cards">
+        <div class="card"><div class="k">From the internet</div><div class="v">unreachable <small>no public IP</small></div></div>
+        <div class="card"><div class="k">From the LAN</div><div class="v">:80 <small>nginx</small></div></div>
+        <div class="card"><div class="k">Via the tunnel</div><div class="v">:443 <small>Cloudflare edge</small></div></div>
+      </div>
+
       <div class="code-card">
-        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+        <div class="code-head"><span class="fn">on the host (optional)</span><span class="lang">bash</span><button class="copy">Copy</button></div>
 <pre>sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow 22/tcp        <span class="c"># SSH — do NOT lock yourself out</span>
+sudo ufw allow 22/tcp                       <span class="c"># SSH — don't lock yourself out</span>
+sudo ufw allow from 192.168.0.0/16 to any port 80 proto tcp   <span class="c"># LAN debug path</span>
 sudo ufw enable
-sudo ufw status verbose
-
-<span class="c"># 80 and 443 are deliberately absent. If a previous deploy opened them:</span>
-sudo ufw delete allow 80/tcp
-sudo ufw delete allow 443/tcp</pre>
+sudo ufw status verbose</pre>
       </div>
 
       <div class="warn">
-        <b>ufw does not filter published Docker ports.</b> Docker writes its own
-        iptables rules ahead of ufw's chain, so a container with
-        <code class="inline">ports: "80:80"</code> stays reachable from the internet
-        even with ufw denying 80. That is exactly why §5.1 deletes the
-        <code class="inline">ports:</code> block rather than relying on the firewall.
-        Confirm nothing is published:
+        <b>ufw does not filter published Docker ports.</b> Docker writes its own iptables
+        rules ahead of ufw's chain, so a container published with
+        <code class="inline">ports:</code> stays reachable even with ufw denying that
+        port. On this host that is acceptable — the LAN is trusted and the internet
+        cannot reach it at all — but it is the reason a public-IP host must
+        <b>delete the <code class="inline">ports:</code> block</b> rather than rely on
+        the firewall.
       </div>
 
       <div class="code-card">
-        <div class="code-head"><span class="fn">verify nothing is exposed</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+        <div class="code-head"><span class="fn">confirm what is exposed</span><span class="lang">bash</span><button class="copy">Copy</button></div>
 <pre>docker compose ps --format 'table {{.Service}}\t{{.Ports}}'
-<span class="c"># The PORTS column must be empty for every service.</span>
-
-sudo ss -tlnp | grep -E ':(80|443)\s'
-<span class="c"># Should print nothing at all.</span></pre>
+<span class="c"># Only nginx should show a port, and only 0.0.0.0:80-&gt;80/tcp.</span>
+<span class="c"># db, backend and frontend must be blank.</span></pre>
       </div>
     </section>
 
@@ -830,30 +778,42 @@ sudo ss -tlnp | grep -E ':(80|443)\s'
     <section id="verify">
       <h2><span class="stepnum">12</span> Verify</h2>
 
+      <h3>Phase 1 — on the LAN</h3>
+      <div class="code-card">
+        <div class="code-head"><span class="fn">from an office machine</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>curl -s http://{{lan}}/api/health
+<span class="c"># → {"status":"ok",...}</span></pre>
+      </div>
+
+      <h3>Phase 2 — published</h3>
       <div class="code-card">
         <div class="code-head"><span class="fn">from anywhere</span><span class="lang">bash</span><button class="copy">Copy</button></div>
-<pre><span class="c"># API health through the full path: edge → tunnel → nginx → backend</span>
+<pre><span class="c"># The full path: edge → existing connector → our nginx → backend</span>
 curl -s https://{{domain}}/api/health
-<span class="c"># → {"status":"ok",...}</span>
 
-<span class="c"># Confirm Cloudflare is actually in front (cf-ray header present)</span>
+<span class="c"># Confirm Cloudflare is really in front (cf-ray header present)</span>
 curl -sI https://{{domain}} | grep -i -E 'cf-ray|server'
 
+<span class="c"># DNS must return Cloudflare anycast IPs, never a LAN or host address</span>
+dig +short {{domain}}
+
 <span class="c"># Which sign-in methods the server offers</span>
-curl -s https://{{domain}}/api/auth/providers
-<span class="c"># → {"google":false}  (or true once §10 is configured)</span></pre>
+curl -s https://{{domain}}/api/auth/providers</pre>
       </div>
 
+      <h3>On the host</h3>
       <div class="code-card">
-        <div class="code-head"><span class="fn">on the VPS — internal path only</span><span class="lang">bash</span><button class="copy">Copy</button></div>
-<pre><span class="c"># nginx is reachable on the Docker network but NOT from the host's port 80</span>
-docker compose exec cloudflared wget -qO- http://nginx:80/api/health
+        <div class="code-head"><span class="fn">on the host</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># nginx really is on the connector's network</span>
+docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' ops-monitor-nginx-1
+<span class="c"># → opsnet {{network}}</span>
 
-<span class="c"># Tunnel connection state — expect 4 healthy connections to Cloudflare edge</span>
-docker compose logs cloudflared | grep -i 'registered tunnel connection'</pre>
+<span class="c"># The connector can actually reach us by container name</span>
+docker exec $(docker ps --format '{{.ID}} {{.Image}}' | grep -i cloudflared | awk '{print $1}') \
+  sh -c 'wget -qO- http://ops-monitor-nginx-1:80/api/health || echo UNREACHABLE'</pre>
       </div>
 
-      <p>Then open <code class="inline">https://<span class="v" data-var="domain"></span></code> and sign in with the admin you created in §9.</p>
+      <p>Then open <code class="inline">https://<span class="v" data-var="domain"></span></code> and sign in.</p>
     </section>
 
     <!-- ── HARDEN ────────────────────────────────────────────────────────── -->
@@ -983,19 +943,29 @@ find ~/backups -name '*.gz' -mtime +14 -delete</pre>
         <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
         <tbody>
           <tr>
-            <td><b>Error 1033</b><br><span class="small">Argo Tunnel error</span></td>
-            <td>No connector registered — <code>cloudflared</code> is down or the token is wrong</td>
-            <td><code>docker compose logs cloudflared</code>; re-copy the token into <code>.env</code>, then <code>docker compose up -d cloudflared</code></td>
+            <td><b><code>network ... declared as external, but could not be found</code></b></td>
+            <td>The connector's network was renamed or its project torn down</td>
+            <td>Re-read the name off the running connector (§5) and update <code>docker-compose.yml</code></td>
           </tr>
           <tr>
             <td><b>Error 502 / 1016</b></td>
-            <td>Service URL points somewhere that isn't nginx</td>
-            <td>Public hostname URL must be <code>nginx:80</code>, and <code>cloudflared</code> must be on <code>networks: [opsnet]</code></td>
+            <td>Public Hostname points somewhere that isn't our nginx</td>
+            <td>Service URL must be <code>ops-monitor-nginx-1:80</code> — never <code>localhost</code>. Confirm nginx is on the shared network (§12)</td>
+          </tr>
+          <tr>
+            <td><b>Error 1033</b></td>
+            <td>The connector itself is down</td>
+            <td>Not this project — check the stack that owns <code><span class="v" data-var="network"></span></code></td>
+          </tr>
+          <tr>
+            <td><b>Works on the LAN, 502 through the hostname</b></td>
+            <td>nginx never joined the connector's network</td>
+            <td><code>docker compose up -d</code> after the §5 edit; verify with the inspect command in §12</td>
           </tr>
           <tr>
             <td><b>DNS doesn't resolve</b></td>
             <td>CNAME is grey-clouded (DNS-only)</td>
-            <td>Toggle the proxy to orange. <code>.cfargotunnel.com</code> is meaningless unproxied</td>
+            <td>Toggle the proxy to orange — <code>.cfargotunnel.com</code> is meaningless unproxied</td>
           </tr>
           <tr>
             <td><b>Redirect loop</b></td>
@@ -1003,24 +973,19 @@ find ~/backups -name '*.gz' -mtime +14 -delete</pre>
             <td>Set <b>Full (strict)</b> in the zone's SSL/TLS settings</td>
           </tr>
           <tr>
-            <td><b>Google sign-in: <code>redirect_uri_mismatch</code></b></td>
-            <td><code>FRONTEND_URL</code> is <code>http://</code>, has a trailing slash, or the console URI differs</td>
-            <td>Set <code>FRONTEND_URL=https://<span class="v" data-var="domain"></span></code> exactly, recreate the backend, match the console byte-for-byte</td>
-          </tr>
-          <tr>
-            <td><b>Google sign-in: "session expired"</b></td>
-            <td>The state cookie was dropped — usually a scheme mismatch</td>
-            <td>Confirm §6's <code>$fwd_proto</code> map is in place so the backend sees <code>https</code></td>
+            <td><b>Google: <code>redirect_uri_mismatch</code></b></td>
+            <td><code>FRONTEND_URL</code> still the phase-1 LAN value, or has a trailing slash</td>
+            <td>Set it to <code>https://<span class="v" data-var="domain"></span></code> exactly, <code>docker compose up -d backend</code>, match the console byte-for-byte</td>
           </tr>
           <tr>
             <td><b>Uploads fail at ~1 MB</b></td>
-            <td><code>client_max_body_size</code> missing from a server block</td>
+            <td><code>client_max_body_size</code> missing</td>
             <td>Keep <code>client_max_body_size 12m;</code> in <code>default.conf</code></td>
           </tr>
           <tr>
             <td><b>All client IPs look like <code>172.x.x.x</code></b></td>
-            <td><code>real_ip</code> directives missing</td>
-            <td>Apply the <code>set_real_ip_from</code> / <code>CF-Connecting-IP</code> block from §6</td>
+            <td>The connector's subnet isn't in the trusted ranges</td>
+            <td>Check its actual subnet; add it to <code>set_real_ip_from</code> — but never add <code>192.168.0.0/16</code> (§6)</td>
           </tr>
           <tr>
             <td><b><code>db:push</code> hangs</b></td>
@@ -1042,23 +1007,24 @@ find ~/backups -name '*.gz' -mtime +14 -delete</pre>
       <p class="lead">Click to tick. Saved in this browser.</p>
 
       <ul class="checklist">
-        <li data-check="demo"><span class="box"></span><span class="txt"><b>Demo accounts removed</b> from <code>login.tsx</code> and the <span class="mono">"Try a demo account below."</span> string from <code>auth.ts</code></span></li>
-        <li data-check="secrets"><span class="box"></span><span class="txt"><b><code>JWT_SECRET</code> and <code>POSTGRES_PASSWORD</code></b> are freshly generated, not the examples</span></li>
-        <li data-check="env"><span class="box"></span><span class="txt"><b><code>FRONTEND_URL</code></b> is <code>https://<span class="v" data-var="domain"></span></code> with no trailing slash</span></li>
-        <li data-check="ports"><span class="box"></span><span class="txt"><b>No published ports</b> — <code>docker compose ps</code> shows an empty PORTS column</span></li>
-        <li data-check="ufw"><span class="box"></span><span class="txt"><b>ufw</b> allows 22 only; 80 and 443 are closed</span></li>
-        <li data-check="proxy"><span class="box"></span><span class="txt"><b>DNS record is proxied</b> (orange cloud) and <code>dig</code> returns Cloudflare IPs</span></li>
-        <li data-check="tls"><span class="box"></span><span class="txt"><b>SSL/TLS mode</b> is Full (strict), Always Use HTTPS is on</span></li>
-        <li data-check="realip"><span class="box"></span><span class="txt"><b>nginx</b> has the <code>real_ip</code> block and <code>$fwd_proto</code> map</span></li>
+        <li data-check="demo"><span class="box"></span><span class="txt"><b>Demo accounts removed</b> from the login page, and the sign-in error is one message for both unknown email and wrong password</span></li>
+        <li data-check="secrets"><span class="box"></span><span class="txt"><b><code>JWT_SECRET</code> and <code>POSTGRES_PASSWORD</code></b> freshly generated, not the examples</span></li>
+        <li data-check="net"><span class="box"></span><span class="txt"><b>Network name confirmed</b> off the running connector, not assumed — <code>docker compose config --quiet</code> passes</span></li>
+        <li data-check="lan"><span class="box"></span><span class="txt"><b>Phase 1 passed on the LAN</b>: sign-in, Device inventory, floor-plan upload, per-property permissions</span></li>
         <li data-check="admin"><span class="box"></span><span class="txt"><b><code>db:seed:admin</code></b> ran; <code>db:seed</code> never did</span></li>
-        <li data-check="ratelimit"><span class="box"></span><span class="txt"><b>Rate limit</b> configured on <code>/api/auth/login</code></span></li>
-        <li data-check="backup"><span class="box"></span><span class="txt"><b>Backup cron</b> installed and one restore tested</span></li>
+        <li data-check="env"><span class="box"></span><span class="txt"><b><code>FRONTEND_URL</code></b> switched to <code>https://<span class="v" data-var="domain"></span></code>, no trailing slash, backend recreated</span></li>
+        <li data-check="hostname"><span class="box"></span><span class="txt"><b>Public Hostname</b> added to the <i>existing</i> tunnel, pointing at <code>ops-monitor-nginx-1:80</code></span></li>
+        <li data-check="proxy"><span class="box"></span><span class="txt"><b>DNS record is proxied</b> (orange cloud); <code>dig</code> returns Cloudflare IPs</span></li>
+        <li data-check="tls"><span class="box"></span><span class="txt"><b>SSL/TLS mode</b> is Full (strict), Always Use HTTPS on</span></li>
+        <li data-check="realip"><span class="box"></span><span class="txt"><b>nginx</b> has the <code>real_ip</code> block <b>without</b> <code>192.168.0.0/16</code>, and the <code>$fwd_proto</code> map</span></li>
+        <li data-check="ratelimit"><span class="box"></span><span class="txt"><b>Rate limit</b> configured on <code>/api/auth/login</code> — the app has no throttle of its own</span></li>
+        <li data-check="backup"><span class="box"></span><span class="txt"><b>Backup cron</b> installed <b>and one restore tested</b></span></li>
         <li data-check="health"><span class="box"></span><span class="txt"><b><code>curl https://<span class="v" data-var="domain"></span>/api/health</code></b> returns <code>{"status":"ok"}</code></span></li>
       </ul>
     </section>
 
     <footer class="pagefoot">
-      Ops Monitor — production deployment via Cloudflare Tunnel.
+      Ops Monitor — published through the host's existing Cloudflare Tunnel connector.
       Companion to <a href="how-to-deploy.md">how-to-deploy.md</a> (port-forward + certbot)
       and <a href="deployment.html">deployment.html</a>.
       Verified against <code>docker-compose.yml</code>, <code>nginx/conf.d/default.conf</code>,
