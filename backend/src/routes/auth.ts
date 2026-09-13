@@ -9,6 +9,7 @@ import { users } from '../db/schema';
 import { loginSchema, changePasswordSchema, updateProfileSchema } from '../shared/types';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext } from '../lib/session';
+import { jwtSecret } from '../lib/security-config';
 import {
   isGoogleEnabled,
   googleConfig,
@@ -17,7 +18,6 @@ import {
   verifyIdToken,
 } from '../lib/google-oauth';
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'default-secret');
 const OAUTH_STATE_COOKIE = 'om_oauth_state';
 
 // A bcrypt hash of a discarded random string, compared against when the email
@@ -50,7 +50,7 @@ function signSession(userId: number): Promise<string> {
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('24h')
-    .sign(secret);
+    .sign(jwtSecret);
 }
 
 // GET /api/auth/providers — which sign-in methods the server offers.

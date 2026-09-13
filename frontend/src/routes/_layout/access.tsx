@@ -9,7 +9,6 @@ import {
   useAccessGroups,
   useAccessHotels,
   useDeleteUser,
-  useResetPassword,
   useUpdateUser,
   useSetAssignments,
   useSetMemberships,
@@ -527,7 +526,6 @@ function UserDrawer({
 }) {
   const setAssignments = useSetAssignments();
   const setMemberships = useSetMemberships();
-  const resetPwd = useResetPassword();
   const updateUser = useUpdateUser();
 
   if (!user) return null;
@@ -643,12 +641,6 @@ function UserDrawer({
 
         {canManage && (
           <div className="mt-5 flex flex-col gap-2 border-t border-line pt-[14px]">
-            <button
-              onClick={() => resetPwd.mutate(user.id, { onSuccess: (d: any) => toast.success(`Password reset to "${d.password}"`), onError: (e: Error) => toast.error(e.message) })}
-              className="h-[34px] rounded-[9px] border border-line bg-surface2 text-[12.5px] font-semibold text-ink"
-            >
-              Reset password
-            </button>
             <button
               onClick={() => updateUser.mutate({ id: user.id, patch: { status: user.status === 'suspended' ? 'active' : 'suspended' } }, { onError: (e: Error) => toast.error(e.message) })}
               className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold"

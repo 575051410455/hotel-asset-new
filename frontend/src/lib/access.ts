@@ -74,10 +74,6 @@ export const useUpdateUser = () =>
   );
 export const useDeleteUser = () =>
   useAccessMutation((id: number) => api.access.users[':id'].$delete({ param: uid(id) }).then(unwrap));
-export const useResetPassword = () =>
-  useAccessMutation((id: number) =>
-    api.access.users[':id']['reset-password'].$post({ param: uid(id), json: {} }).then(unwrap)
-  );
 export const useSetAssignments = () =>
   useAccessMutation(({ id, assignments }: { id: number; assignments: { hotelId: string; roleId: string }[] }) =>
     api.access.users[':id'].assignments.$put({ param: uid(id), json: { assignments } }).then(unwrap)

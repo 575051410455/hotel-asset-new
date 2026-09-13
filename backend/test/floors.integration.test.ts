@@ -18,7 +18,7 @@ import bcrypt from 'bcryptjs';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import app from '../src/app';
 import { db } from '../src/db';
-import { floors, devices, users, assignments } from '../src/db/schema';
+import { floors, devices, users, assignments, roles } from '../src/db/schema';
 
 const SLUG_PREFIX = 'zz-test-';
 const DEV_PREFIX = 'ZZ-TEST-';
@@ -28,6 +28,40 @@ const TEST_HOTELS = ['rh2', 'rh3'];
 const ADMIN_EMAIL = `${USER_PREFIX}admin@example.invalid`;
 const VIEWER_EMAIL = `${USER_PREFIX}viewer@example.invalid`;
 const PASSWORD = 'zz-test-Pa55word!';
+
+function registerRegressionSuite() {
+describe('floor authorization regression fixture', () => {
+  test.skipIf(!reachable)('omitted kind excludes CCTV floors and pins for a custom floor-only role', async () => {
+    const roleId = 'zz-test-floor-only';
+    const actorEmail = `${USER_PREFIX}floor-only@example.invalid`;
+    const floorId = 'zz-test-private-cctv';
+    try {
+      await db.insert(roles).values({ id: roleId, name: 'Regression floor only',
+        perms: { devices: 'none', floors: 'read', cctv: 'none', access: 'none' } });
+      const [actor] = await db.insert(users).values({ email: actorEmail,
+        name: 'Regression actor', passwordHash: await bcrypt.hash(PASSWORD, 10) }).returning();
+      await db.insert(assignments).values({ userId: actor.id, hotelId: 'rh2', roleId });
+      await db.insert(floors).values({ id: floorId, hotelId: 'rh2', name: 'Private CCTV',
+        short: 'Private', kind: 'cctv', departments: [] });
+      await db.insert(devices).values({ hotelId: 'rh2', floorId,
+        computerName: 'ZZ-TEST-PRIVATE-CCTV', type: 'Camera', x: 10, y: 10, ip: '192.0.2.123' });
+      const headers = authed(await login(actorEmail, PASSWORD));
+      const omitted = await api('/api/floors?hotelId=rh2', { headers });
+      expect(omitted.status).toBe(200);
+      const body = await omitted.json();
+      expect(body.every((floor: { kind: string }) => floor.kind === 'workstation')).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('192.0.2.123');
+      expect((await api('/api/floors?hotelId=rh2&kind=cctv', { headers })).status).toBe(403);
+    } finally {
+      await db.delete(devices).where(eq(devices.computerName, 'ZZ-TEST-PRIVATE-CCTV'));
+      await db.delete(floors).where(and(eq(floors.hotelId, 'rh2'), eq(floors.id, floorId)));
+      await db.delete(users).where(eq(users.email, actorEmail));
+      await db.delete(roles).where(eq(roles.id, roleId));
+    }
+  });
+});
+
+}
 
 // Probe the DB once. If it can't be reached we skip rather than hang/fail.
 let reachable = false;
@@ -44,6 +78,7 @@ if (process.env.DATABASE_URL) {
 }
 
 const api = (path: string, init?: RequestInit) => app.fetch(new Request('http://localhost' + path, init));
+registerRegressionSuite();
 
 async function login(email: string, password: string): Promise<string> {
   const res = await api('/api/auth/login', {

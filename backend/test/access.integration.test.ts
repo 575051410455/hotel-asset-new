@@ -98,6 +98,19 @@ suite('access-control mutations (integration)', () => {
 
   afterAll(cleanup);
 
+  test('retired web reset never changes or discloses a password', async () => {
+    const [before] = await db.select().from(users).where(eq(users.id, memberId));
+    for (const body of [{}, { newPassword: 'attacker-selected-password' }]) {
+      const response = await api(`/api/access/users/${memberId}/reset-password`, {
+        method: 'POST', headers: auth(), body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(410);
+      expect(await response.json()).not.toHaveProperty('password');
+    }
+    const [after] = await db.select().from(users).where(eq(users.id, memberId));
+    expect(after.passwordHash).toBe(before.passwordHash);
+  });
+
   test('creating a group with a property that does not exist is a 400 naming it', async () => {
     const before = await countGroups();
     const res = await postGroup({

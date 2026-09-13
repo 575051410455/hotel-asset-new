@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import postgres from 'postgres';
 import bcrypt from 'bcryptjs';
-import { like } from 'drizzle-orm';
+import { like, eq } from 'drizzle-orm';
 import app from '../src/app';
 import { db } from '../src/db';
 import { users, assignments } from '../src/db/schema';
@@ -55,6 +55,19 @@ async function cleanup() {
 const suite = reachable ? describe : describe.skip;
 
 suite('auth routes (integration)', () => {
+  test('suspension invalidates an already issued token on protected routes', async () => {
+    const login = await postLogin({ email: ACTIVE, password: PASSWORD });
+    const { token } = await login.json();
+    expect(typeof token).toBe('string');
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.email, ACTIVE));
+    try {
+      for (const path of ['/api/auth/me', '/api/hotels', '/api/devices?hotelId=rh2', '/api/floors?hotelId=rh2', '/api/access/users']) {
+        expect((await api(path, { headers: { authorization: `Bearer ${token}` } })).status).toBe(401);
+      }
+    } finally {
+      await db.update(users).set({ status: 'active' }).where(eq(users.email, ACTIVE));
+    }
+  });
   beforeAll(async () => {
     await cleanup();
     // Cost 10 — the same cost db:seed:admin uses.

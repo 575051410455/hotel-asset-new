@@ -268,12 +268,9 @@ accessRoutes.delete('/users/:id', authMiddleware, async (c) => {
 accessRoutes.post('/users/:id/reset-password', authMiddleware, zValidator('json', resetPasswordSchema), async (c) => {
   const { ok } = await gate(Number(c.get('userId')), 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
-  const id = Number(c.req.param('id'));
-  const newPassword = c.req.valid('json').newPassword ?? 'changeme123';
-  const passwordHash = await bcrypt.hash(newPassword, 10);
-  const [u] = await db.update(users).set({ passwordHash }).where(eq(users.id, id)).returning({ id: users.id });
-  if (!u) return c.json({ error: 'User not found' }, 404);
-  return c.json({ ok: true, password: newPassword });
+  // Retired: web administrators must not create replacement credentials or
+  // turn a Google-only identity into a local-password account.
+  return c.json({ error: 'Web password reset has been retired. Contact the server operator for account recovery.' }, 410);
 });
 
 // Replace a user's direct (non-group) property assignments.
