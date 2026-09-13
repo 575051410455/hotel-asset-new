@@ -28,9 +28,11 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-opsmonitor}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opsmonitor}
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       PORT: "3000"
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      # The public https origin (the tunnel hostname). Required: only requests from
+      # this origin may change data, and it makes the session cookie Secure. The
+      # backend refuses to start without a valid https value.
+      FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL to the public https origin in .env}
       # Google "Sign in with Google" — blank disables the feature.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

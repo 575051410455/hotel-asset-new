@@ -24,7 +24,7 @@ export type AuthUser = {
 };
 
 export type MeResponse = { user: AuthUser; hotels: HotelAccess[] };
-export type LoginResponse = { token: string; user: AuthUser; hotels: HotelAccess[] };
+export type LoginResponse = { user: AuthUser; hotels: HotelAccess[] };
 
 // ── Status presentation ──────────────────────────────────────────────────────
 // Unified status → presentation map (ported verbatim from the Dashboard's

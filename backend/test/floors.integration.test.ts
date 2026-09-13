@@ -17,6 +17,7 @@ import postgres from 'postgres';
 import bcrypt from 'bcryptjs';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import app from '../src/app';
+import { cookiesFrom, sessionHeaders, origin } from './session-client';
 import { db } from '../src/db';
 import { floors, devices, users, assignments, roles } from '../src/db/schema';
 
@@ -83,16 +84,15 @@ registerRegressionSuite();
 async function login(email: string, password: string): Promise<string> {
   const res = await api('/api/auth/login', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', origin },
     body: JSON.stringify({ email, password }),
   });
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
-  return data.token;
+  if (!res.ok) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
+  return cookiesFrom(res);
 }
 
 const authed = (token: string, extra: Record<string, string> = {}) => ({
-  authorization: `Bearer ${token}`,
+  ...sessionHeaders(token),
   ...extra,
 });
 

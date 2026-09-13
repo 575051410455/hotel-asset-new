@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, Outlet } from '@tanstack/react-router';
-import { TOKEN_KEY } from '@/lib/api';
+import { hasSession } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { AppSidebar } from '@/components/app-shell/app-sidebar';
 import { Topbar } from '@/components/app-shell/topbar';
@@ -8,8 +8,8 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { Spinner } from '@/components/ui/spinner';
 
 export const Route = createFileRoute('/_layout')({
-  beforeLoad: () => {
-    if (!localStorage.getItem(TOKEN_KEY)) {
+  beforeLoad: async () => {
+    if (!(await hasSession())) {
       throw redirect({ to: '/login' });
     }
   },

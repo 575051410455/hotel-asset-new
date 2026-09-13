@@ -124,6 +124,69 @@ Still outstanding for the rename:
   refuse to proceed if any role would lack `userManagement`.
 - `platform_admin` is recorded but not yet consulted by any route.
 
+## Fourth increment — rollout phase 3 (server-side sessions, core)
+
+Bearer JWTs in local storage are replaced by opaque, revocable sessions in
+PostgreSQL. Following the decision for this increment, no legacy JWT is
+accepted: every user signs in again once after the deploy.
+
+- **Cookies:**
+  - `om-session` holds a random identifier and is HttpOnly. Only its SHA-256
+    digest is stored.
+  - `om-csrf` holds a second random value the page reads and sends back as
+    `X-CSRF-Token` on writes. Its digest is stored on the session, so a token
+    from another session is refused.
+  - Both are SameSite=Strict, Path=/, and last 12 hours. They are Secure
+    whenever `FRONTEND_URL` is https. Sign-in responses are `no-store`.
+- **Every protected request** resolves the cookie to a session that is not
+  revoked and belongs to an Active account. It also enforces the idle timeout
+  (30 minutes for accounts with User Management authority, 60 otherwise) and
+  the 12-hour absolute limit. A session found dead is revoked with its reason,
+  and the cookies are cleared. An expired session answers 401 with
+  `code: session_expired`.
+- **Every POST/PUT/PATCH/DELETE under `/api`,** sign-in included, must carry
+  the exact `FRONTEND_URL` Origin.
+- **Revocation:**
+  - Logout revokes the current session.
+  - Suspension revokes every session of the account in the same transaction,
+    and reactivation does not revive them.
+  - A password change revokes every session, the current one included.
+  - Issuing a session locks the account row, so it cannot race a suspension.
+- **Configuration:** `FRONTEND_URL` is validated at startup in
+  `security-config.ts`, the single owner of this setting. It must be https,
+  except for localhost in development. `JWT_SECRET` and all JWT signing code
+  are gone, and compose now requires `FRONTEND_URL`. Consequence: sign-in over
+  the plain-HTTP office LAN (port 80) is refused, so staff sign in through the
+  tunnel's https hostname.
+- **Frontend:** no credential in local storage (a leftover `om-token` is
+  removed on load). Requests carry the CSRF header from the cookie. Route
+  guards ask `/api/auth/me`, and logout calls the server.
+- **Verification:**
+  - Session integration tests: cookie attributes, digest-only storage,
+    bearer/forged/missing cookie refusal, CSRF (missing, wrong, and bound to
+    another session), foreign and missing Origin, logout revocation, suspension
+    by API and directly in the database without resurrection, idle 60 and 30,
+    absolute expiry, password-change revocation.
+  - Startup tests for `FRONTEND_URL`.
+  - A live check through the dev server: sign-in, then logout refused without
+    the CSRF token and accepted with it, then the same cookie refused.
+  - Results: backend suite 109 pass, 1 skip, 0 fail; frontend 21/21; both
+    packages typecheck.
+- **Provenance:** two drafts of this increment were written concurrently in
+  the same working tree and merged into this one design. The session middleware
+  and the auth integration suite were rewritten during the merge.
+
+Still outstanding from the session part of the spec:
+
+- Self-service session list and per-device revocation.
+- Session identifier rotation after sensitive actions, and the five-minute
+  recent-authentication requirement.
+- Security audit events for session creation, expiry and revocation.
+- A trusted client address: `clientIp` records nginx's `X-Real-IP` as
+  descriptive metadata only.
+- Google sign-in still auto-provisions accounts on the allowed domain; that is
+  removed with pre-provisioning in phase 4.
+
 ## Remaining specification work
 
 Opaque PostgreSQL sessions, permanent revocation, cookie/CSRF migration, Google-only

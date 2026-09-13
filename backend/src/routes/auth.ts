@@ -1,15 +1,14 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { SignJWT } from 'jose';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { db } from '../db';
-import { users } from '../db/schema';
+import { users, sessions } from '../db/schema';
 import { loginSchema, changePasswordSchema, updateProfileSchema } from '../shared/types';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext } from '../lib/session';
-import { jwtSecret } from '../lib/security-config';
+import { issueSession, clearSessionCookies, revokeUserSessions, sessionOrigin } from '../lib/auth-session';
 import {
   isGoogleEnabled,
   googleConfig,
@@ -44,20 +43,13 @@ function publicUser(u: typeof users.$inferSelect) {
   };
 }
 
-// Sign a 24h HS256 session token for a user id.
-function signSession(userId: number): Promise<string> {
-  return new SignJWT({ sub: String(userId) })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('24h')
-    .sign(jwtSecret);
-}
 
 // GET /api/auth/providers — which sign-in methods the server offers.
 authRoutes.get('/providers', (c) => c.json({ google: isGoogleEnabled() }));
 
 // POST /api/auth/login
 authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
+  if (c.req.header('origin') !== sessionOrigin()) return c.json({ error: 'Invalid request origin' }, 403);
   const { email, password } = c.req.valid('json');
 
   const [user] = await db
@@ -91,10 +83,10 @@ authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
 
   await db.update(users).set({ lastLogin: new Date() }).where(eq(users.id, user.id));
 
-  const token = await signSession(user.id);
+  await issueSession(c, user.id, 'password');
   const ctx = await buildUserContext(user.id);
 
-  return c.json({ token, user: publicUser(user), hotels: ctx.hotels });
+  return c.json({ user: publicUser(user), hotels: ctx.hotels });
 });
 
 // ── Google OAuth (server-side Authorization Code flow) ───────────────────────
@@ -193,13 +185,16 @@ authRoutes.get('/google/callback', async (c) => {
       .where(eq(users.id, user.id));
   }
 
-  const token = await signSession(user.id);
-  // Deliver the token in the URL fragment (never sent to servers / not logged).
-  return c.redirect(`${backTo}#token=${encodeURIComponent(token)}`);
+  await issueSession(c, user.id, 'google');
+  return c.redirect(`${backTo}#signed-in`);
 });
 
-// POST /api/auth/logout (stateless — client drops the token)
-authRoutes.post('/logout', (c) => c.json({ ok: true }));
+authRoutes.post('/logout', authMiddleware, async (c) => {
+  await db.update(sessions).set({ revokedAt: new Date(), revokedReason: 'logout' })
+    .where(eq(sessions.id, c.get('sessionId')));
+  clearSessionCookies(c);
+  return c.json({ ok: true });
+});
 
 // GET /api/auth/me — current user + accessible hotels with effective perms
 authRoutes.get('/me', authMiddleware, async (c) => {
@@ -246,7 +241,11 @@ authRoutes.post(
     if (!valid) return c.json({ error: 'Current password is incorrect' }, 400);
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ passwordHash }).where(eq(users.id, userId));
+      await revokeUserSessions(userId, 'password-change', tx);
+    });
+    clearSessionCookies(c);
     return c.json({ ok: true });
   }
 );

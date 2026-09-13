@@ -123,10 +123,11 @@ function PasswordCard() {
     mutationFn: (body: { currentPassword: string; newPassword: string }) =>
       api.auth['change-password'].$post({ json: body }).then(unwrap),
     onSuccess: () => {
-      setMsg({ ok: true, text: '✓ Password updated. Use it next time you sign in.' });
+      setMsg({ ok: true, text: 'Password updated. All sessions have ended. Please sign in again.' });
       setCur('');
       setNext('');
       setConfirm('');
+      window.location.href = '/login';
     },
     onError: (e: Error) => setMsg({ ok: false, text: e.message }),
   });

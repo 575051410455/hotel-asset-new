@@ -339,8 +339,7 @@ cp .env.example .env</pre>
 
       <div class="code-card">
         <div class="code-head"><span class="fn">generate secrets</span><span class="lang">bash</span><button class="copy">Copy</button></div>
-<pre>echo "POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)"
-echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
+<pre>echo "POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)"</pre>
       </div>
 
       <div class="code-card">
@@ -358,7 +357,7 @@ echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
 <span class="k">POSTGRES_PASSWORD</span>=<span class="s">&lt;paste the generated value&gt;</span>
 
 <span class="c"># ── Auth ──────────────────────────────────────────────────────</span>
-<span class="k">JWT_SECRET</span>=<span class="s">&lt;paste the generated value&gt;</span>
+<span class="c"># Sessions live server-side in Postgres — there is no signing secret to set.</span>
 
 <span class="c"># ── Cloudflare Tunnel ─────────────────────────────────────────</span>
 <span class="c"># Nothing to set. This stack runs no cloudflared of its own and</span>
@@ -1008,9 +1007,9 @@ find ~/backups -name '*.gz' -mtime +14 -delete</pre>
 
       <ul class="checklist">
         <li data-check="demo"><span class="box"></span><span class="txt"><b>Demo accounts removed</b> from the login page, and the sign-in error is one message for both unknown email and wrong password</span></li>
-        <li data-check="secrets"><span class="box"></span><span class="txt"><b><code>JWT_SECRET</code> and <code>POSTGRES_PASSWORD</code></b> freshly generated, not the examples</span></li>
+        <li data-check="secrets"><span class="box"></span><span class="txt"><b><code>POSTGRES_PASSWORD</code></b> freshly generated, and <b><code>FRONTEND_URL</code></b> set to the public https origin</span></li>
         <li data-check="net"><span class="box"></span><span class="txt"><b>Network name confirmed</b> off the running connector, not assumed — <code>docker compose config --quiet</code> passes</span></li>
-        <li data-check="lan"><span class="box"></span><span class="txt"><b>Phase 1 passed on the LAN</b>: sign-in, Device inventory, floor-plan upload, per-property permissions</span></li>
+        <li data-check="lan"><span class="box"></span><span class="txt"><b>Phase 1 passed through the tunnel</b>: sign-in, Device inventory, floor-plan upload, per-property permissions (sign-in over the plain-HTTP LAN is refused by design)</span></li>
         <li data-check="admin"><span class="box"></span><span class="txt"><b><code>db:seed:admin</code></b> ran; <code>db:seed</code> never did</span></li>
         <li data-check="env"><span class="box"></span><span class="txt"><b><code>FRONTEND_URL</code></b> switched to <code>https://<span class="v" data-var="domain"></span></code>, no trailing slash, backend recreated</span></li>
         <li data-check="hostname"><span class="box"></span><span class="txt"><b>Public Hostname</b> added to the <i>existing</i> tunnel, pointing at <code>ops-monitor-nginx-1:80</code></span></li>

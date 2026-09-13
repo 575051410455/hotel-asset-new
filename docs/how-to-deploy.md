@@ -14,9 +14,9 @@ production on a single Ubuntu 24.04 (Noble) VPS using Docker Compose + nginx.
 ```bash
 # on the VPS, as a sudo user
 git clone <your-repo-url> ops-monitor && cd ops-monitor
-cp .env.example .env && nano .env          # set POSTGRES_PASSWORD, JWT_SECRET, FRONTEND_URL
+cp .env.example .env && nano .env          # set POSTGRES_PASSWORD, FRONTEND_URL
 docker compose up -d --build               # build + start all 4 services
-docker compose exec backend bun run db:push   # create the database tables
+docker compose exec backend bun run db:migrate  # create the database tables
 
 # create your first admin user (only that — no demo data). See §7 for details.
 docker compose exec -e ADMIN_EMAIL=you@company.com -e ADMIN_PASSWORD='strong-pass' \
@@ -137,7 +137,6 @@ Generate strong secrets:
 
 ```bash
 echo "POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d /+=)"
-echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d /+=)"
 ```
 
 Edit `.env`:
@@ -145,8 +144,7 @@ Edit `.env`:
 | Variable            | Required | Notes                                                                 |
 |---------------------|----------|-----------------------------------------------------------------------|
 | `POSTGRES_PASSWORD` | **Yes**  | Compose refuses to start without it.                                  |
-| `JWT_SECRET`        | **Yes**  | HS256 signing key, 24 h tokens. **Keep stable** — changing it logs everyone out. |
-| `FRONTEND_URL`      | Yes      | Public origin for the backend's CORS allow-list. `http://<SERVER_IP>` now, `https://your-domain` after TLS. |
+| `FRONTEND_URL`      | **Yes**  | The public **https** origin. Only requests from it may change data, and it makes the session cookies Secure; the backend refuses to start without it. |
 | `POSTGRES_DB`       | No       | Defaults to `opsmonitor`.                                             |
 | `POSTGRES_USER`     | No       | Defaults to `opsmonitor`.                                             |
 
@@ -417,14 +415,14 @@ docker run --rm -v ops-monitor_uploads:/data -v "$PWD":/backup alpine \
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `error: set POSTGRES_PASSWORD in .env` on `up` | Missing required secret | Set `POSTGRES_PASSWORD` / `JWT_SECRET` in `.env`. |
-| `502 Bad Gateway` from nginx | Backend not up yet / crashed | `docker compose logs backend`; ensure `db` is healthy and `db:push` ran. |
-| Login fails / "Invalid credentials" | DB not initialized or no user | Run `db:push`, then create an admin (§7). |
-| `relation "users" does not exist` | Schema never created | `docker compose exec backend bun run db:push`. |
+| `error: set POSTGRES_PASSWORD in .env` on `up` | Missing required secret | Set `POSTGRES_PASSWORD` / `FRONTEND_URL` in `.env`. |
+| `502 Bad Gateway` from nginx | Backend not up yet / crashed | `docker compose logs backend`; ensure `db` is healthy and `db:migrate` ran. |
+| Login fails / "Invalid credentials" | DB not initialized or no user | Run `db:migrate`, then create an admin (§7). |
+| `relation "users" does not exist` | Schema never created | `docker compose exec backend bun run db:migrate`. |
 | Browser CORS errors | `FRONTEND_URL` ≠ the URL you're visiting | Set `FRONTEND_URL` to the exact public origin, `docker compose up -d`. |
 | Floor-plan upload returns 413 | Body too large | nginx already allows 12 MB (`client_max_body_size`); images are capped at 10 MB. |
 | Code changes not reflected | Image not rebuilt | `docker compose up -d --build`. |
-| Everyone logged out after a deploy | `JWT_SECRET` changed | Keep `JWT_SECRET` stable across deploys. |
+| `Invalid request origin` (403) on sign-in | `FRONTEND_URL` isn't the exact https origin in the address bar | Fix `FRONTEND_URL`, then `docker compose up -d`. |
 
 ---
 

@@ -149,7 +149,7 @@ if [ -f docker-compose.yml ]; then
   kv "compose project name" "$(awk -F': *' '/^name:/{print $2; exit}' docker-compose.yml)"
   if [ -f .env ]; then
     ok ".env present"
-    for k in FRONTEND_URL POSTGRES_PASSWORD JWT_SECRET GOOGLE_CLIENT_ID; do
+    for k in FRONTEND_URL POSTGRES_PASSWORD GOOGLE_CLIENT_ID; do
       v=$(grep -E "^${k}=" .env 2>/dev/null | head -1 | cut -d= -f2-)
       case "$k" in
         FRONTEND_URL) kv "$k" "${v:-<unset>}" ;;                      # not a secret

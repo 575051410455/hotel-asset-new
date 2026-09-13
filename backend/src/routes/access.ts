@@ -26,6 +26,7 @@ import {
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext, maxPerm } from '../lib/session';
 import { computeEffectiveAccess } from '../lib/rbac';
+import { revokeUserSessions } from '../lib/auth-session';
 import { normalizeRolePerms, withLegacyAccessKey } from '../lib/permissions';
 
 export const accessRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -251,7 +252,11 @@ accessRoutes.patch('/users/:id', authMiddleware, zValidator('json', updateUserSc
     if (dupe && dupe.id !== id) return c.json({ error: 'Another user already has that email.' }, 409);
     patch.email = email;
   }
-  const [updated] = await db.update(users).set(patch).where(eq(users.id, id)).returning();
+  const [updated] = await db.transaction(async (tx) => {
+    const rows = await tx.update(users).set(patch).where(eq(users.id, id)).returning();
+    if (patch.status && patch.status !== 'active') await revokeUserSessions(id, 'account-status', tx);
+    return rows;
+  });
   if (!updated) return c.json({ error: 'User not found' }, 404);
   return c.json(publicUser(updated));
 });

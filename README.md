@@ -26,7 +26,7 @@ docs/        Project docs (see docs/add-a-floor.md)
 ```bash
 cd backend
 bun install
-cp .env.example .env            # then fill in DATABASE_URL + JWT_SECRET
+cp .env.example .env            # then fill in DATABASE_URL + FRONTEND_URL
 bun run db:create               # create the database
 bun run db:migrate              # apply the checked-in migrations (backend/drizzle)
 bun run db:seed                 # seed demo hotels, roles, users, floors, devices

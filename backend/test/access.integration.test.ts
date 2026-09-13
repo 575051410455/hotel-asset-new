@@ -15,6 +15,7 @@ import postgres from 'postgres';
 import bcrypt from 'bcryptjs';
 import { and, eq, like } from 'drizzle-orm';
 import app from '../src/app';
+import { cookiesFrom, sessionHeaders, origin } from './session-client';
 import { db } from '../src/db';
 import { users, groups, assignments, groupHotels, groupMembers, roles } from '../src/db/schema';
 
@@ -49,12 +50,11 @@ const api = (path: string, init?: RequestInit) => app.fetch(new Request('http://
 async function login(email: string, password: string): Promise<string> {
   const res = await api('/api/auth/login', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', origin },
     body: JSON.stringify({ email, password }),
   });
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
-  return data.token;
+  if (!res.ok) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
+  return cookiesFrom(res);
 }
 
 async function cleanup() {
@@ -70,7 +70,7 @@ suite('access-control mutations (integration)', () => {
   let token = '';
   let adminId = 0;
   let memberId = 0;
-  const auth = () => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' });
+  const auth = () => ({ ...sessionHeaders(token), 'content-type': 'application/json' });
 
   const postGroup = (body: unknown) =>
     api('/api/access/groups', { method: 'POST', headers: auth(), body: JSON.stringify(body) });
@@ -100,6 +100,18 @@ suite('access-control mutations (integration)', () => {
   });
 
   afterAll(cleanup);
+
+  test('suspend then reactivate cannot resurrect an old session', async () => {
+    const memberCookie = await login(MEMBER_EMAIL, PASSWORD);
+    for (const status of ['suspended', 'active']) {
+      const response = await api(`/api/access/users/${memberId}`, {
+        method: 'PATCH', headers: auth(), body: JSON.stringify({ status }),
+      });
+      expect(response.status).toBe(200);
+      expect((await api('/api/auth/me', { headers: sessionHeaders(memberCookie) })).status).toBe(401);
+    }
+    expect((await api('/api/auth/me', { headers: sessionHeaders(await login(MEMBER_EMAIL, PASSWORD)) })).status).toBe(200);
+  });
 
   test('retired web reset never changes or discloses a password', async () => {
     const [before] = await db.select().from(users).where(eq(users.id, memberId));
@@ -265,7 +277,7 @@ suite('access-control mutations (integration)', () => {
     await db.delete(assignments).where(eq(assignments.userId, memberId));
     await db.insert(assignments).values({ userId: memberId, hotelId: 'rh2', roleId: id });
 
-    const headers = { authorization: `Bearer ${await login(MEMBER_EMAIL, PASSWORD)}` };
+    const headers = sessionHeaders(await login(MEMBER_EMAIL, PASSWORD));
     const hotels = (await (await api('/api/hotels', { headers })).json()) as {
       id: string;
       perms: Record<string, string>;
