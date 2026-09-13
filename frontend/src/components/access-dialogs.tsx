@@ -198,7 +198,16 @@ export function GroupDialog({
   const create = useCreateGroup();
   const update = useUpdateGroup();
   const [name, setName] = useState(group?.name ?? '');
-  const [roleId, setRoleId] = useState(group?.roleId ?? 'viewer');
+  // Roles are created and deleted by users, so no role id may be assumed to
+  // exist — a database bootstrapped for production carries only `admin`.
+  // Defaulting to a literal left the select showing the one real option while
+  // the state still held the literal, so the request sent a role that wasn't
+  // there. Start from what the server actually returned instead.
+  const [roleId, setRoleId] = useState(() => {
+    const current = group?.roleId;
+    if (current && roles.some((r) => r.id === current)) return current;
+    return roles[0]?.id ?? '';
+  });
   const [hotelIds, setHotelIds] = useState<string[]>(group?.hotelIds ?? []);
   const [memberIds, setMemberIds] = useState<number[]>(group?.memberIds ?? []);
   const [error, setError] = useState('');
@@ -210,6 +219,7 @@ export function GroupDialog({
   const submit = () => {
     setError('');
     if (!name.trim()) return setError('Group name is required.');
+    if (!roleId) return setError('No roles exist yet — create a role first.');
     if (hotelIds.length === 0) return setError('Pick at least one property.');
     const body = { name: name.trim(), roleId, hotelIds, memberIds };
     if (isEdit && group) {
