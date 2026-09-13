@@ -271,13 +271,15 @@ suite('floors routes (integration)', () => {
     expect(create.status).toBe(201);
     expect((await create.json()).kind).toBe('workstation');
 
-    // PATCH cannot touch it: the field is not in the update schema, so sending
-    // it changes nothing rather than erroring.
-    await api(`/api/floors/${slug}?hotelId=rh2`, {
+    // PATCH cannot touch it: the field is not in the update schema, so a body
+    // carrying only `kind` has nothing to write and is refused with a 400
+    // (it used to reach the database empty and fail as a 500).
+    const patchKind = await api(`/api/floors/${slug}?hotelId=rh2`, {
       method: 'PATCH',
       headers: authed(admin, { 'content-type': 'application/json' }),
       body: JSON.stringify({ kind: 'cctv' }),
     });
+    expect(patchKind.status).toBe(400);
     const afterPatch = await (await api('/api/floors?hotelId=rh2', { headers: authed(admin) })).json();
     expect(afterPatch.find((f: { id: string }) => f.id === slug).kind).toBe('workstation');
 
@@ -380,5 +382,81 @@ suite('floors routes (integration)', () => {
     // Admin delete cleans the pin up.
     const adminDel = await api(`/api/devices/${pin.id}`, { method: 'DELETE', headers: authed(admin) });
     expect(adminDel.status).toBe(200);
+  });
+
+  // ── A device's floor must exist and match its kind ──────────────────────────
+  const postDevice = (body: Record<string, unknown>) =>
+    api('/api/devices', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ hotelId: 'rh2', status: 'active', x: 50, y: 50, ...body }),
+    });
+
+  test('placing a device on a floor that does not exist is a 400, not a 500', async () => {
+    const res = await postDevice({
+      floorId: `${SLUG_PREFIX}nowhere`,
+      computerName: `${DEV_PREFIX}GHOST`,
+      type: 'Desktop',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('a camera is refused on a workstation floor, and a workstation on a CCTV floor', async () => {
+    // `alpha` is a workstation floor (revived above); make a CCTV one alongside.
+    const cctv = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: `${SLUG_PREFIX}cams`, kind: 'cctv', short: 'ZZ Cams' })),
+    });
+    expect(cctv.status).toBe(201);
+
+    const camOnWs = await postDevice({
+      floorId: `${SLUG_PREFIX}alpha`,
+      computerName: `${DEV_PREFIX}CAM-WRONG`,
+      type: 'IP Camera',
+    });
+    expect(camOnWs.status).toBe(400);
+
+    const wsOnCctv = await postDevice({
+      floorId: `${SLUG_PREFIX}cams`,
+      computerName: `${DEV_PREFIX}WS-WRONG`,
+      type: 'Desktop',
+    });
+    expect(wsOnCctv.status).toBe(400);
+
+    // The matching placement still works, and so does dragging it.
+    const cam = await postDevice({
+      floorId: `${SLUG_PREFIX}cams`,
+      computerName: `${DEV_PREFIX}CAM-1`,
+      type: 'IP Camera',
+    });
+    expect(cam.status).toBe(201);
+    const camId = (await cam.json()).id as number;
+
+    const drag = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ x: 10, y: 90 }),
+    });
+    expect(drag.status).toBe(200);
+
+    // Moving it to a workstation floor, or retyping it in place, is refused.
+    const move = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ floorId: `${SLUG_PREFIX}alpha` }),
+    });
+    expect(move.status).toBe(400);
+
+    const retype = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ type: 'Desktop' }),
+    });
+    expect(retype.status).toBe(400);
+
+    const [unchanged] = await db.select().from(devices).where(eq(devices.id, camId));
+    expect(unchanged.floorId).toBe(`${SLUG_PREFIX}cams`);
+    expect(unchanged.type).toBe('IP Camera');
   });
 });

@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import { and, eq, or, ilike, asc } from 'drizzle-orm';
+import { and, eq, or, ilike, asc, isNull } from 'drizzle-orm';
 import { zValidator } from '@hono/zod-validator';
 import { db } from '../db';
-import { devices } from '../db/schema';
+import { devices, floors } from '../db/schema';
+import { floorMismatch } from '../lib/device-floor';
 import {
   createDeviceSchema,
   updateDeviceSchema,
@@ -65,6 +66,21 @@ deviceRoutes.get('/:id', authMiddleware, async (c) => {
   return c.json(device);
 });
 
+// A device's floor must be a live floor of the same property whose kind fits
+// the device (cameras on CCTV floors, everything else on workstation floors).
+// Returns why it doesn't, or null. Without this an unknown floor surfaced as a
+// foreign-key 500, and a camera could be pinned to a workstation floor.
+async function floorProblem(hotelId: string, floorId: string | null | undefined, type: string) {
+  if (!floorId) return null;
+  const [floor] = await db
+    .select({ kind: floors.kind })
+    .from(floors)
+    .where(and(eq(floors.hotelId, hotelId), eq(floors.id, floorId), isNull(floors.deletedAt)))
+    .limit(1);
+  if (!floor) return `Floor "${floorId}" does not exist for this property.`;
+  return floorMismatch(type, floor.kind);
+}
+
 // POST /api/devices — create a device (requires CRUD on devices for the hotel)
 deviceRoutes.post('/', authMiddleware, zValidator('json', createDeviceSchema), async (c) => {
   const userId = Number(c.get('userId'));
@@ -74,6 +90,9 @@ deviceRoutes.post('/', authMiddleware, zValidator('json', createDeviceSchema), a
   if (!canAccess(ctx, body.hotelId, 'devices', 'crud')) {
     return c.json({ error: 'Forbidden' }, 403);
   }
+
+  const problem = await floorProblem(body.hotelId, body.floorId, body.type);
+  if (problem) return c.json({ error: problem }, 400);
 
   const [existing] = await db
     .select({ id: devices.id })
@@ -98,6 +117,14 @@ deviceRoutes.patch('/:id', authMiddleware, zValidator('json', updateDeviceSchema
   const ctx = await buildUserContext(Number(c.get('userId')));
   if (!canAccess(ctx, device.hotelId, 'devices', 'crud')) {
     return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  // Re-check the floor only when the patch could break the fit: a new floor,
+  // or a new type on the current one. A drag (x/y only) never changes it.
+  if (patch.floorId !== undefined || patch.type !== undefined) {
+    const floorId = patch.floorId === undefined ? device.floorId : patch.floorId;
+    const problem = await floorProblem(device.hotelId, floorId, patch.type ?? device.type);
+    if (problem) return c.json({ error: problem }, 400);
   }
 
   const [updated] = await db

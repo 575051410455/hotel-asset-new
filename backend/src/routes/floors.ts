@@ -39,7 +39,9 @@ floorRoutes.get('/', authMiddleware, zValidator('query', listQuery), async (c) =
     .where(and(...conds))
     .orderBy(asc(floors.sortOrder));
 
-  const pinRows = await db.select().from(devices).where(eq(devices.hotelId, hotelId));
+  const pinRows = floorRows.length ? await db.select().from(devices).where(and(
+    eq(devices.hotelId, hotelId), inArray(devices.floorId, floorRows.map((floor) => floor.id))
+  )) : [];
 
   const result = floorRows.map((f) => ({
     ...f,
@@ -117,6 +119,11 @@ floorRoutes.patch(
     if (!(await requireFloorsCrud(c, hotelId))) return c.json({ error: 'Forbidden' }, 403);
 
     const patch = c.req.valid('json');
+    // Unknown keys (e.g. `kind`, which is permanent) are stripped by the schema,
+    // so a body carrying only those leaves nothing to write.
+    if (Object.keys(patch).length === 0) {
+      return c.json({ error: 'Nothing to update. A floor\'s kind cannot be changed — delete it and create it again.' }, 400);
+    }
     const [updated] = await db
       .update(floors)
       .set(patch)
