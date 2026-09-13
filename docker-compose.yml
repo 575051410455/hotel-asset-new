@@ -53,20 +53,39 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
+      # Kept deliberately. This host has NO public IP, so binding :80 exposes the
+      # app to the office LAN only — which is the phase-1 test path and stays the
+      # way in when the tunnel is down. On a host that DOES hold a public IP this
+      # line must be deleted: it would bypass every Cloudflare protection.
       - "80:80"
-      # - "443:443"                       # enable for HTTPS (see docs/deployment.html)
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      # - letsencrypt:/etc/letsencrypt    # uncomment for TLS certs
-      # - certbot-www:/var/www/certbot    # uncomment for ACME challenge
     depends_on: [frontend, backend]
-    networks: [opsnet]
+    # opsnet      — this project's private network (db, backend, frontend)
+    # hms-network — the network the host's EXISTING cloudflared connector is on.
+    #               nginx joins it so that connector can reach us; we run no
+    #               cloudflared of our own and hold no tunnel token.
+    networks: [opsnet, hms-network]
 
 volumes:
   pgdata:
   uploads:
-  # letsencrypt:
-  # certbot-www:
 
 networks:
   opsnet:
+
+  # ── Dependency on another project, recorded deliberately ──────────────────
+  # Created and owned by the stack that runs this host's cloudflared connector,
+  # NOT by this file. We mark it external so Compose attaches to it rather than
+  # creating its own.
+  #
+  # The risk that buys: if that project is torn down, or renames this network,
+  # `docker compose up` here fails with "network hms-network declared as
+  # external, but could not be found" until this file is edited. That was the
+  # accepted trade for not running a second connector and not modifying a
+  # project this repository does not own.
+  #
+  # Confirm the name before changing it:
+  #   docker inspect -f '{{range $$k,$$v := .NetworkSettings.Networks}}{{$$k}} {{end}}' <cloudflared-container>
+  hms-network:
+    external: true

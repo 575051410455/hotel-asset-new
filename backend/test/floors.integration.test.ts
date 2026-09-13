@@ -1,20 +1,33 @@
 // Integration tests for the floor routes, driven through the real Hono app
 // (app.fetch) against the configured Postgres. They use clearly-namespaced
-// fixtures (slug `zz-test-*`, device `ZZ-TEST-*`) under existing seeded hotels
-// and HARD-delete them afterwards, so seeded demo data is never touched.
+// fixtures (slug `zz-test-*`, device `ZZ-TEST-*`, user `zz-test-floors-*`)
+// under existing seeded hotels and HARD-delete them afterwards, so seeded demo
+// data is never touched.
+//
+// The actors are created here rather than borrowed from the seeded demo
+// accounts. Those accounts' grants drift — the demo "viewer" currently holds no
+// property access at all — which made this suite fail on a correct application.
+// Owning the fixtures means the suite asserts the permission model rather than
+// the current state of the seed.
 //
 // The whole suite is skipped (not failed) when the database is unreachable, so
 // the pure unit tests still run in an offline environment.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import postgres from 'postgres';
+import bcrypt from 'bcryptjs';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import app from '../src/app';
 import { db } from '../src/db';
-import { floors, devices } from '../src/db/schema';
+import { floors, devices, users, assignments } from '../src/db/schema';
 
 const SLUG_PREFIX = 'zz-test-';
 const DEV_PREFIX = 'ZZ-TEST-';
+const USER_PREFIX = 'zz-test-floors-';
 const TEST_HOTELS = ['rh2', 'rh3'];
+
+const ADMIN_EMAIL = `${USER_PREFIX}admin@example.invalid`;
+const VIEWER_EMAIL = `${USER_PREFIX}viewer@example.invalid`;
+const PASSWORD = 'zz-test-Pa55word!';
 
 // Probe the DB once. If it can't be reached we skip rather than hang/fail.
 let reachable = false;
@@ -55,6 +68,28 @@ async function cleanup() {
   await db
     .delete(floors)
     .where(and(inArray(floors.hotelId, TEST_HOTELS), like(floors.id, `${SLUG_PREFIX}%`)));
+  // Assignments cascade with the user rows.
+  await db.delete(users).where(like(users.email, `${USER_PREFIX}%`));
+}
+
+// Create the two actors this suite needs: an admin with crud on both test
+// properties, and a viewer with read on rh2 only.
+async function createActors() {
+  const passwordHash = await bcrypt.hash(PASSWORD, 10);
+
+  const [admin] = await db
+    .insert(users)
+    .values({ email: ADMIN_EMAIL, passwordHash, name: 'ZZ Test Floors Admin', status: 'active' })
+    .returning();
+  const [viewer] = await db
+    .insert(users)
+    .values({ email: VIEWER_EMAIL, passwordHash, name: 'ZZ Test Floors Viewer', status: 'active' })
+    .returning();
+
+  await db.insert(assignments).values([
+    ...TEST_HOTELS.map((hotelId) => ({ userId: admin.id, hotelId, roleId: 'admin' })),
+    { userId: viewer.id, hotelId: 'rh2', roleId: 'viewer' },
+  ]);
 }
 
 // describe.skip is universally available; pick it when the DB is down.
@@ -75,9 +110,10 @@ suite('floors routes (integration)', () => {
   });
 
   beforeAll(async () => {
-    admin = await login('chai@richmond.local', 'admin123'); // admin on all properties
-    viewer = await login('gift@richmond.local', 'user123'); // viewer on rh2
-    await cleanup();
+    await cleanup(); // clear anything a previous interrupted run left behind
+    await createActors();
+    admin = await login(ADMIN_EMAIL, PASSWORD); // crud on rh2 + rh3
+    viewer = await login(VIEWER_EMAIL, PASSWORD); // read on rh2 only
   });
   afterAll(cleanup);
 
