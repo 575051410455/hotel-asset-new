@@ -7,6 +7,12 @@ import {
 } from 'lucide-react';
 import { api, unwrap } from '@/lib/api';
 import { DeviceDialog, type DeviceTab } from '@/components/device-dialog';
+import {
+  placementState,
+  placementOptionsToRender,
+  placementHint,
+  type PlacementTab,
+} from '@/lib/floor-placement';
 import { useDeleteDevice } from '@/lib/devices';
 import { buildPinConfig } from '@/lib/pin-config';
 import { statusMeta, type Device, type FloorWithPins } from '@/lib/types';
@@ -100,13 +106,12 @@ export function FloorMapView({
   const placeTypeRef = useRef(placeType);
   placeTypeRef.current = placeType;
 
-  // What you can drop on this kind of floor.
-  const placeOptions: { tab: DeviceTab; label: string; noun: string; Icon: typeof Cctv }[] = isCam
-    ? [{ tab: 'cam', label: 'Add camera', noun: 'a camera', Icon: Cctv }]
-    : [
-        { tab: 'ws', label: 'Add workstation', noun: 'a workstation', Icon: Monitor },
-        { tab: 'ap', label: 'Add AP', noun: 'an access point', Icon: Wifi },
-      ];
+  // What you can drop on this floor, and why you can't — decided in lib so the
+  // rule is testable and cannot drift between screens.
+  const placement = placementState(floor, canEdit);
+  const canPlace = placement.canPlace;
+  const PLACE_ICON: Record<PlacementTab, typeof Cctv> = { cam: Cctv, ws: Monitor, ap: Wifi };
+  const placeOptions = placementOptionsToRender(floor, canEdit);
   const placeNoun = placeOptions.find((o) => o.tab === placeType)?.noun ?? 'a device';
 
   // ── auto-refresh (live countdown + "last updated") ──────────────────────────
@@ -218,9 +223,11 @@ export function FloorMapView({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [placeType]);
+  // Switching to a floor that can't take pins (no plan yet) cancels place mode
+  // too, so a stray click can't drop one after the buttons have gone disabled.
   useEffect(() => {
-    if (!canEdit) setPlaceType(null);
-  }, [canEdit]);
+    if (!canPlace) setPlaceType(null);
+  }, [canPlace]);
 
   // Stamp the last-updated time and reset the countdown whenever a fetch settles.
   const wasFetchingRef = useRef(false);
@@ -553,6 +560,7 @@ export function FloorMapView({
           <>
             {placeOptions.map((o) => {
               const on = placeType === o.tab;
+              const Icon = PLACE_ICON[o.tab];
               return (
                 <button
                   key={o.tab}
@@ -560,14 +568,17 @@ export function FloorMapView({
                     setEditMode(false);
                     setPlaceType((t) => (t === o.tab ? null : o.tab));
                   }}
-                  disabled={!floor}
-                  title={`Click on the map to place ${o.noun}`}
+                  // Shown but disabled without a floor plan: a pin placed on
+                  // blank space is measured against a placeholder aspect ratio
+                  // and moves once the real plan arrives.
+                  disabled={!canPlace}
+                  title={placementHint(floor, canEdit, o)}
                   className={cn(
-                    'flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-semibold disabled:opacity-50',
+                    'flex h-[30px] items-center gap-[6px] rounded-lg border px-[11px] text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-50',
                     on ? 'border-brand bg-brand text-brand-foreground' : 'border-line bg-surface text-ink2 hover:text-ink'
                   )}
                 >
-                  <o.Icon size={13} />
+                  <Icon size={13} />
                   {o.label}
                 </button>
               );
@@ -842,8 +853,13 @@ export function FloorMapView({
           {isEmpty && (
             <Overlay>
               <div className="text-[13.5px] font-bold text-ink">No {isCam ? 'cameras' : 'devices'} on this floor</div>
-              <div className="max-w-[260px] text-center text-[12px] text-ink3">
-                This property has no floor plan or pins yet.
+              {/* Two different situations that used to share one misleading
+                  message: the floor genuinely has no plan yet, or it has one
+                  and simply nothing placed. They need different next steps. */}
+              <div className="max-w-[280px] text-center text-[12px] text-ink3">
+                {floor && !floor.image
+                  ? 'Upload a floor plan for this floor, then place pins on it.'
+                  : `Use ${isCam ? 'Add camera' : 'Add workstation'} to place the first pin.`}
               </div>
             </Overlay>
           )}

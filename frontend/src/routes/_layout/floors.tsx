@@ -32,7 +32,7 @@ function KindPill({ kind }: { kind: string }) {
   return (
     <span className="inline-flex items-center gap-[6px] rounded-full border border-line bg-surface2 px-[10px] py-[3px] text-[11px] font-semibold text-ink2">
       <Icon size={12} className="text-ink3" />
-      {isCctv ? 'CCTV zone' : 'Workstation'}
+      {isCctv ? 'CCTV floor' : 'Workstation floor'}
     </span>
   );
 }

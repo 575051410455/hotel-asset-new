@@ -221,6 +221,45 @@ suite('floors routes (integration)', () => {
     expect((await revive.json()).short).toBe('ZZ Revived');
   });
 
+  // A floor's kind cannot be patched — updateFloorSchema does not accept it —
+  // so delete-then-recreate is the ONLY way to correct a floor created with the
+  // wrong kind, and the UI's guidance says exactly that. It works because the
+  // revive path overwrites every field. If revival is ever changed to preserve
+  // fields instead, that escape hatch disappears silently, so pin it here.
+  test('reviving a soft-deleted slug replaces its kind, the only way to change one', async () => {
+    const slug = `${SLUG_PREFIX}kind`;
+    const create = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: slug, kind: 'workstation', short: 'ZZ Kind WS' })),
+    });
+    expect(create.status).toBe(201);
+    expect((await create.json()).kind).toBe('workstation');
+
+    // PATCH cannot touch it: the field is not in the update schema, so sending
+    // it changes nothing rather than erroring.
+    await api(`/api/floors/${slug}?hotelId=rh2`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'cctv' }),
+    });
+    const afterPatch = await (await api('/api/floors?hotelId=rh2', { headers: authed(admin) })).json();
+    expect(afterPatch.find((f: { id: string }) => f.id === slug).kind).toBe('workstation');
+
+    // Delete and recreate with the same slug: the kind really does change.
+    expect(
+      (await api(`/api/floors/${slug}?hotelId=rh2`, { method: 'DELETE', headers: authed(admin) })).status
+    ).toBe(200);
+
+    const revived = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: slug, kind: 'cctv', short: 'ZZ Kind CCTV' })),
+    });
+    expect(revived.status).toBe(201);
+    expect((await revived.json()).kind).toBe('cctv');
+  });
+
   test('a viewer can read floors but not create / patch / delete', async () => {
     expect((await api('/api/floors?hotelId=rh2', { headers: authed(viewer) })).status).toBe(200);
 

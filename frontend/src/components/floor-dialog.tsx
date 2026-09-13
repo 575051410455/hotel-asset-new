@@ -262,7 +262,7 @@ export function FloorDialog({
                 {(
                   [
                     { v: 'workstation', label: 'Workstation floor', sub: 'Computers & Wi-Fi APs', Icon: Monitor },
-                    { v: 'cctv', label: 'CCTV zone', sub: 'Cameras & coverage', Icon: Cctv },
+                    { v: 'cctv', label: 'CCTV floor', sub: 'Cameras & coverage', Icon: Cctv },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -286,6 +286,26 @@ export function FloorDialog({
                   </button>
                 ))}
               </div>
+
+              {/* The choice is permanent — neither this dialog nor the API can
+                  change it afterwards — so say so before it is made, and name
+                  the way out rather than leaving a wrong pick looking stuck. */}
+              <p className="-mt-[6px] text-[11px] leading-[1.5] text-ink3">
+                {isEdit ? (
+                  <>
+                    A floor&rsquo;s type is fixed. To change it, delete this floor and create it
+                    again with the same name &mdash; its devices stay in the inventory.
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold text-ink2">This can&rsquo;t be changed later.</span>{' '}
+                    A workstation floor offers <span className="text-ink2">Add workstation</span> and{' '}
+                    <span className="text-ink2">Add AP</span>; a CCTV floor offers{' '}
+                    <span className="text-ink2">Add camera</span>. Changing it means deleting the
+                    floor and creating it again.
+                  </>
+                )}
+              </p>
 
               <label className="flex flex-col gap-[5px]">
                 <span className="text-[11.5px] font-semibold text-ink2">Floor name</span>
@@ -467,7 +487,7 @@ export function FloorDialog({
                   <span className="text-ink3">Name</span>
                   <span className="font-semibold text-ink">{name || '—'}</span>
                   <span className="text-ink3">Type</span>
-                  <span className="text-ink">{isCctv ? 'CCTV zone' : 'Workstation floor'}</span>
+                  <span className="text-ink">{isCctv ? 'CCTV floor' : 'Workstation floor'}</span>
                   <span className="text-ink3">Slug</span>
                   <span className="font-mono text-ink">{slug || '—'}</span>
                   <span className="text-ink3">Floor plan</span>
