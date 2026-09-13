@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ops Monitor — Production Deploy: Docker Compose + Cloudflare Tunnel</title>
+<meta name="description" content="Deploy the Ops Monitor stack to a VPS with Docker Compose behind a Cloudflare Tunnel — no open ports, no certbot, DNS and nginx included.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/deploy-production.css">
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<header class="hero">
+  <div class="wrap">
+    <div class="logo">
+      <span class="mark">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1b1207" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 14a5 5 0 0 1 .9-9.9A6.5 6.5 0 0 1 18 6.5a4.5 4.5 0 0 1 1 8.9"/>
+          <path d="M12 12v9M8.5 17.5 12 21l3.5-3.5"/>
+        </svg>
+      </span>
+      <span class="name">Ops Monitor</span>
+    </div>
+
+    <div class="badge-row">
+      <span class="pill"><span class="dot"></span> Cloudflare Tunnel</span>
+      <span class="pill">Docker Compose</span>
+      <span class="pill">Ubuntu 24.04 VPS</span>
+      <span class="pill">nginx</span>
+      <span class="pill">Zero open ports</span>
+    </div>
+
+    <h1>Production deploy — Docker Compose behind a Cloudflare Tunnel</h1>
+    <p>
+      Put the full stack on a VPS and expose it at a real hostname without opening
+      port 80 or 443, without a public IP, and without ever running certbot.
+      <code class="inline" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#e8eff8">cloudflared</code>
+      dials <em>out</em> to Cloudflare; nothing dials in.
+    </p>
+
+    <!-- Fill these once; every command below rewrites itself. -->
+    <div class="configbar">
+      <div class="f">
+        <label for="f-domain">Your hostname</label>
+        <input id="f-domain" data-field="domain" spellcheck="false" autocomplete="off" placeholder="ops.example.com">
+      </div>
+      <div class="f">
+        <label for="f-tunnel">Tunnel name</label>
+        <input id="f-tunnel" data-field="tunnel" spellcheck="false" autocomplete="off" placeholder="ops-monitor">
+      </div>
+      <div class="f">
+        <label for="f-user">VPS sudo user</label>
+        <input id="f-user" data-field="user" spellcheck="false" autocomplete="off" placeholder="deploy">
+      </div>
+      <div class="f">
+        <label for="f-dir">Install directory</label>
+        <input id="f-dir" data-field="dir" spellcheck="false" autocomplete="off" placeholder="ops-monitor">
+      </div>
+      <p class="hint">
+        Typed here, substituted everywhere — saved in your browser so it survives a reload.
+      </p>
+    </div>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<div class="wrap">
+
+  <!-- ── TOC ─────────────────────────────────────────────────────────────── -->
+  <nav class="toc" id="toc">
+    <h4>On this page</h4>
+    <a href="#why">Why a tunnel</a>
+    <a href="#arch">1 · Architecture</a>
+    <a href="#prereq">2 · Prerequisites</a>
+    <a href="#docker">3 · Install Docker</a>
+    <a href="#code">4 · Code &amp; .env</a>
+    <a href="#compose">5 · Compose changes</a>
+    <a href="#nginx">6 · nginx changes</a>
+    <a href="#tunnel">7 · Create the tunnel</a>
+    <a href="#dns">8 · DNS</a>
+    <a href="#run">9 · First run</a>
+    <a href="#google">10 · Google sign-in</a>
+    <a href="#firewall">11 · Lock the firewall</a>
+    <a href="#verify">12 · Verify</a>
+    <a href="#harden">13 · Cloudflare hardening</a>
+    <a href="#ops">14 · Day-2 operations</a>
+    <a href="#trouble">15 · Troubleshooting</a>
+    <a href="#checklist">16 · Checklist</a>
+  </nav>
+
+  <main>
+
+    <!-- ── SUPERSEDED NOTICE ─────────────────────────────────────────────── -->
+    <section id="superseded" style="border-color:var(--bad);border-left:4px solid var(--bad)">
+      <h2 style="color:var(--bad)">⚠ Partly superseded — do not follow §5 or §7 yet</h2>
+      <p class="lead" style="margin-bottom:0">
+        This guide was written assuming this stack runs <b>its own</b>
+        <code class="inline">cloudflared</code> connector. That is no longer the plan.
+        The deploy host <b>already runs a Cloudflare Tunnel connector</b>, and the
+        decision taken since was to <b>reuse it</b>: this project adds no
+        <code class="inline">cloudflared</code> service and holds no tunnel token.
+        Its nginx instead joins the network that connector is already on, declared
+        as an external network, and <code class="inline">map.csprint.co.th</code> is
+        added as a Public Hostname on the <b>existing</b> tunnel pointing at this
+        project's nginx container.
+      </p>
+      <p style="margin-bottom:0">
+        Sections <b>5 (Compose changes)</b> and <b>7 (Create the tunnel)</b> are
+        therefore wrong as written. Everything else — architecture, host prep,
+        nginx, DNS, first run, Google sign-in, verification, hardening, day-2 ops,
+        troubleshooting — still applies. See
+        <code class="inline">docs/specs/publish-via-cloudflare-tunnel.md</code> for
+        the decisions of record; this page is rewritten once the deployment is
+        verified, so that it documents what was actually shipped.
+      </p>
+    </section>
+
+    <!-- ── WHY ───────────────────────────────────────────────────────────── -->
+    <section id="why">
+      <h2>Why a tunnel instead of open ports</h2>
+      <p class="lead">
+        <code class="inline">docs/how-to-deploy.md</code> covers the classic route:
+        publish port 80/443 and issue a Let's Encrypt certificate. This guide replaces
+        that edge entirely. Both end at the same four containers.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>&nbsp;</th><th>Port-forward + certbot</th><th>Cloudflare Tunnel</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Inbound ports</b></td>
+            <td>80 + 443 open to the internet</td>
+            <td><span class="tag yes">None</span> — outbound only</td>
+          </tr>
+          <tr>
+            <td><b>Public IP</b></td>
+            <td>Required</td>
+            <td>Not required — works behind NAT/CGNAT</td>
+          </tr>
+          <tr>
+            <td><b>TLS certificate</b></td>
+            <td>certbot + renewal cron on the box</td>
+            <td><span class="tag yes">Managed</span> by Cloudflare, auto-renewed</td>
+          </tr>
+          <tr>
+            <td><b>Origin IP exposure</b></td>
+            <td>Visible in DNS</td>
+            <td><span class="tag yes">Hidden</span> — DNS points at the tunnel</td>
+          </tr>
+          <tr>
+            <td><b>DDoS / WAF</b></td>
+            <td>Yours to solve</td>
+            <td>Cloudflare edge, free tier included</td>
+          </tr>
+          <tr>
+            <td><b>SSO in front of the app</b></td>
+            <td>Build it yourself</td>
+            <td>Cloudflare Access (optional, see §13)</td>
+          </tr>
+          <tr>
+            <td><b>Dependency</b></td>
+            <td>None beyond your VPS</td>
+            <td><span class="tag no">Cloudflare</span> — they are now in your critical path</td>
+          </tr>
+          <tr>
+            <td><b>Cost</b></td>
+            <td>Free</td>
+            <td>Free tier is sufficient here</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <b>The honest trade-off:</b> you swap "I manage certificates and a firewall"
+        for "Cloudflare can see my traffic and is a hard dependency." For an internal
+        IT operations dashboard that is almost always the right trade. For something
+        that must survive a Cloudflare outage, it is not.
+      </div>
+    </section>
+
+    <!-- ── ARCH ──────────────────────────────────────────────────────────── -->
+    <section id="arch">
+      <h2><span class="stepnum cf">1</span> Architecture</h2>
+      <p class="lead">
+        Five containers on a private <code class="inline">opsnet</code> bridge.
+        <b>Nothing is published to the host.</b> <code class="inline">cloudflared</code>
+        holds a persistent outbound connection to Cloudflare's edge and forwards
+        requests to <code class="inline">nginx:80</code> over the Docker network.
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 760 300" role="img" aria-label="Request flow from browser through Cloudflare edge and cloudflared into nginx, backend, frontend and Postgres">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 10 5 0 10z" fill="#56636f"/>
+            </marker>
+            <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 10 5 0 10z" fill="#f6821f"/>
+            </marker>
+          </defs>
+          <style>
+            .bx{fill:#fff;stroke:#e2e6ec;stroke-width:1.4;rx:9}
+            .lb{font:600 12px 'IBM Plex Sans Thai',sans-serif;fill:#16202b}
+            .sm{font:11px 'IBM Plex Mono',monospace;fill:#8a96a3}
+            .ln{stroke:#56636f;stroke-width:1.5;fill:none;marker-end:url(#a)}
+            .lo{stroke:#f6821f;stroke-width:2;fill:none;marker-end:url(#ao)}
+          </style>
+
+          <!-- browser -->
+          <rect class="bx" x="14" y="118" width="104" height="52"/>
+          <text class="lb" x="66" y="140" text-anchor="middle">Browser</text>
+          <text class="sm" x="66" y="156" text-anchor="middle">HTTPS</text>
+
+          <!-- cloudflare edge -->
+          <rect class="bx" x="152" y="110" width="122" height="68" style="fill:#fdf1e3;stroke:#f6821f"/>
+          <text class="lb" x="213" y="134" text-anchor="middle">Cloudflare</text>
+          <text class="lb" x="213" y="150" text-anchor="middle">edge</text>
+          <text class="sm" x="213" y="166" text-anchor="middle">TLS + WAF</text>
+
+          <!-- VPS boundary -->
+          <rect x="308" y="18" width="438" height="266" rx="12" fill="none" stroke="#8a96a3" stroke-width="1.3" stroke-dasharray="5 4"/>
+          <text class="sm" x="322" y="36">VPS — no inbound ports open</text>
+
+          <!-- cloudflared -->
+          <rect class="bx" x="326" y="112" width="106" height="64" style="fill:#fdf1e3;stroke:#f6821f"/>
+          <text class="lb" x="379" y="136" text-anchor="middle">cloudflared</text>
+          <text class="sm" x="379" y="152" text-anchor="middle">outbound</text>
+          <text class="sm" x="379" y="166" text-anchor="middle">only</text>
+
+          <!-- nginx -->
+          <rect class="bx" x="464" y="112" width="94" height="64"/>
+          <text class="lb" x="511" y="139" text-anchor="middle">nginx</text>
+          <text class="sm" x="511" y="156" text-anchor="middle">:80</text>
+
+          <!-- frontend -->
+          <rect class="bx" x="596" y="52" width="134" height="52"/>
+          <text class="lb" x="663" y="74" text-anchor="middle">frontend</text>
+          <text class="sm" x="663" y="90" text-anchor="middle">SPA · static</text>
+
+          <!-- backend -->
+          <rect class="bx" x="596" y="122" width="134" height="52"/>
+          <text class="lb" x="663" y="144" text-anchor="middle">backend</text>
+          <text class="sm" x="663" y="160" text-anchor="middle">Bun · :3000</text>
+
+          <!-- db -->
+          <rect class="bx" x="596" y="196" width="134" height="52"/>
+          <text class="lb" x="663" y="218" text-anchor="middle">db</text>
+          <text class="sm" x="663" y="234" text-anchor="middle">Postgres :5432</text>
+
+          <!-- arrows -->
+          <path class="ln" d="M120 144 H148"/>
+          <path class="lo" d="M376 108 V70 H286 V106" transform="translate(0,0)"/>
+          <text class="sm" x="300" y="62" fill="#f6821f">dials out ↑</text>
+          <path class="ln" d="M434 144 H460"/>
+          <path class="ln" d="M560 138 H576 V80 H592"/>
+          <path class="ln" d="M560 148 H592"/>
+          <path class="ln" d="M663 176 V192"/>
+          <text class="sm" x="576" y="72">/</text>
+          <text class="sm" x="570" y="132">/api</text>
+        </svg>
+      </div>
+
+      <div class="cards">
+        <div class="card"><div class="k">Published ports</div><div class="v">0 <small>— none</small></div></div>
+        <div class="card"><div class="k">Certificates on VPS</div><div class="v">0 <small>— none</small></div></div>
+        <div class="card"><div class="k">Containers</div><div class="v">5 <small>+ cloudflared</small></div></div>
+        <div class="card"><div class="k">Volumes</div><div class="v">2 <small>pgdata · uploads</small></div></div>
+      </div>
+
+      <p>
+        nginx keeps its job unchanged: <code class="inline">/api/</code> and
+        <code class="inline">/uploads/</code> to <code class="inline">backend:3000</code>,
+        everything else to <code class="inline">frontend:80</code>. The SPA calls a
+        <b>relative</b> <code class="inline">/api</code>, so there is still no
+        build-time API URL to configure.
+      </p>
+    </section>
+
+    <!-- ── PREREQ ────────────────────────────────────────────────────────── -->
+    <section id="prereq">
+      <h2><span class="stepnum">2</span> Prerequisites</h2>
+      <ul>
+        <li>A VPS running <b>Ubuntu 24.04 LTS</b> with a sudo-capable user
+          (<code class="inline"><span class="v" data-var="user"></span></code>) — don't deploy as root.</li>
+        <li><b>~2 GB RAM.</b> Postgres + Bun + two nginx + cloudflared. 1 GB will build but may OOM during <code class="inline">bun install</code>.</li>
+        <li>Outbound access on <b>TCP/UDP 7844</b> to Cloudflare — QUIC preferred, falls back to HTTPS. Most VPS providers allow this by default.</li>
+        <li>A <b>domain on a Cloudflare account</b>, with its nameservers already pointed at Cloudflare (the zone must be Active).</li>
+        <li>Inbound <b>22 (SSH)</b> only. 80 and 443 stay closed for good.</li>
+      </ul>
+
+      <div class="tip">
+        <b>No public IP needed.</b> This works from a home server behind CGNAT just
+        as well as from a datacentre VPS. That is the point of a tunnel.
+      </div>
+    </section>
+
+    <!-- ── DOCKER ────────────────────────────────────────────────────────── -->
+    <section id="docker">
+      <h2><span class="stepnum">3</span> Install Docker Engine + Compose plugin</h2>
+      <p class="lead">Official Docker apt repository — the distro packages are too old and conflict.</p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># Remove conflicting distro packages</span>
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+  sudo apt-get remove -y $pkg 2&gt;/dev/null || true
+done
+
+<span class="c"># Add Docker's official GPG key + repository</span>
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release &amp;&amp; echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list &gt; /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+                        docker-buildx-plugin docker-compose-plugin
+
+<span class="c"># Run docker without sudo (log out and back in afterwards)</span>
+sudo usermod -aG docker $USER</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">verify</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>docker --version          <span class="c"># Docker version 27.x</span>
+docker compose version    <span class="c"># Docker Compose version v2.x</span>
+docker run --rm hello-world</pre>
+      </div>
+    </section>
+
+    <!-- ── CODE ──────────────────────────────────────────────────────────── -->
+    <section id="code">
+      <h2><span class="stepnum">4</span> Get the code and write <code class="inline">.env</code></h2>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>cd ~
+git clone https://github.com/575051410455/hotel-asset-new.git {{dir}}
+cd {{dir}}
+cp .env.example .env</pre>
+      </div>
+
+      <p>Generate real secrets — never reuse the examples:</p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">generate secrets</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>echo "POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)"
+echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)"</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">.env</span><span class="lang">env</span><button class="copy">Copy</button></div>
+<pre><span class="c"># ── Public origin ─────────────────────────────────────────────</span>
+<span class="c"># MUST be https and MUST NOT have a trailing slash. This value drives</span>
+<span class="c"># the Google OAuth redirect_uri and the secure flag on the state cookie.</span>
+<span class="k">FRONTEND_URL</span>=<span class="s">https://{{domain}}</span>
+
+<span class="c"># ── Database ──────────────────────────────────────────────────</span>
+<span class="k">POSTGRES_DB</span>=<span class="s">opsmonitor</span>
+<span class="k">POSTGRES_USER</span>=<span class="s">opsmonitor</span>
+<span class="k">POSTGRES_PASSWORD</span>=<span class="s">&lt;paste the generated value&gt;</span>
+
+<span class="c"># ── Auth ──────────────────────────────────────────────────────</span>
+<span class="k">JWT_SECRET</span>=<span class="s">&lt;paste the generated value&gt;</span>
+
+<span class="c"># ── Cloudflare Tunnel ─────────────────────────────────────────</span>
+<span class="c"># From the Zero Trust dashboard in §7. Treat it like a password:</span>
+<span class="c"># anyone holding it can serve traffic on your hostname.</span>
+<span class="k">CLOUDFLARE_TUNNEL_TOKEN</span>=<span class="s">&lt;paste the tunnel token&gt;</span>
+
+<span class="c"># ── Google sign-in (optional — blank disables the feature) ────</span>
+<span class="k">GOOGLE_CLIENT_ID</span>=
+<span class="k">GOOGLE_CLIENT_SECRET</span>=
+<span class="k">GOOGLE_ALLOWED_DOMAIN</span>=</pre>
+      </div>
+
+      <div class="warn">
+        <b><code class="inline">FRONTEND_URL</code> is not cosmetic.</b>
+        <code class="inline">backend/src/lib/google-oauth.ts</code> derives
+        <code class="inline">redirectUri</code> from it, and
+        <code class="inline">routes/auth.ts</code> sets the OAuth state cookie's
+        <code class="inline">secure</code> flag from whether that URI starts with
+        <code class="inline">https://</code>. Leave it as
+        <code class="inline">http://localhost</code> and Google sign-in breaks in a
+        way that is genuinely annoying to debug.
+      </div>
+
+      <div class="danger">
+        <b>Before this reaches a public hostname:</b> the login page ships hardcoded
+        demo accounts. <code class="inline">frontend/src/routes/login.tsx:21-25</code>
+        renders clickable buttons containing <code class="inline">chai@richmond.local</code>
+        / <code class="inline">admin123</code> and friends, with no
+        <code class="inline">import.meta.env.DEV</code> guard — so they are compiled
+        into the production bundle. The matching users are <em>not</em> seeded on
+        production (<code class="inline">db:seed</code> refuses under
+        <code class="inline">NODE_ENV=production</code>), so the buttons fail to log
+        in — but they still publish your internal email domain, staff names and role
+        map to anyone who opens the page. Strip them, and the
+        <span class="mono">"Try a demo account below."</span> string at
+        <code class="inline">backend/src/routes/auth.ts:71</code>, before you go live.
+      </div>
+    </section>
+
+    <!-- ── COMPOSE ───────────────────────────────────────────────────────── -->
+    <section id="compose">
+      <h2><span class="stepnum cf">5</span> Compose: unpublish nginx, add <code class="inline">cloudflared</code></h2>
+      <p class="lead">
+        Two edits to <code class="inline">docker-compose.yml</code>. Keep everything
+        else exactly as it is.
+      </p>
+
+      <h3>5.1 — Remove the published port from nginx</h3>
+      <p>
+        This is the edit that actually closes the door. With a tunnel, publishing 80
+        to the host is not just unnecessary — it is a bypass around every Cloudflare
+        protection you are about to configure.
+      </p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">docker-compose.yml — nginx service</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
+<pre>  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    <span class="c"># ports:                    ← DELETE this block entirely.</span>
+    <span class="c">#   - "80:80"                  cloudflared reaches nginx over opsnet,</span>
+    <span class="c">#                              not through the host.</span>
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on: [frontend, backend]
+    networks: [opsnet]</pre>
+      </div>
+
+      <h3>5.2 — Add the <code class="inline">cloudflared</code> service</h3>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">docker-compose.yml — append under services:</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
+<pre>  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    <span class="c"># --no-autoupdate: the image is the update mechanism; let Compose pull it.</span>
+    command: tunnel --no-autoupdate --loglevel info run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+      <span class="c"># Metrics endpoint for the health probe below.</span>
+      TUNNEL_METRICS: 0.0.0.0:2000
+    depends_on: [nginx]
+    networks: [opsnet]
+    healthcheck:
+      test: ["CMD", "cloudflared", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3</pre>
+      </div>
+
+      <div class="note">
+        <b>Why <code class="inline">TUNNEL_TOKEN</code> as an environment variable
+        rather than <code class="inline">--token</code> on the command line?</b>
+        A token passed as an argument shows up in <code class="inline">docker inspect</code>,
+        <code class="inline">ps aux</code> on the host, and your shell history.
+        The env var is still readable by anyone who can run Docker, but it stops
+        leaking into process listings.
+      </div>
+
+      <div class="tip">
+        <b>Prefer config files over a dashboard token?</b> See §7 <i>Option B</i> —
+        a locally-managed tunnel with <code class="inline">config.yml</code> and a
+        credentials JSON, mounted read-only. It keeps routing in git; it also means
+        the dashboard can't change your routes.
+      </div>
+    </section>
+
+    <!-- ── NGINX ─────────────────────────────────────────────────────────── -->
+    <section id="nginx">
+      <h2><span class="stepnum">6</span> nginx: real client IPs and the right scheme</h2>
+      <p class="lead">
+        Behind a tunnel, every request arrives from the <code class="inline">cloudflared</code>
+        container's Docker IP over plain HTTP. Two headers need fixing or your logs
+        lie to you and the backend thinks it's on <code class="inline">http</code>.
+      </p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">nginx/conf.d/default.conf</span><span class="lang">nginx</span><button class="copy">Copy</button></div>
+<pre><span class="c"># Cloudflare puts the true client IP here; cloudflared forwards it.</span>
+<span class="c"># Trust it only from the Docker bridge ranges — never from the internet.</span>
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+real_ip_header CF-Connecting-IP;
+real_ip_recursive on;
+
+<span class="c"># The edge terminated TLS, so $scheme here is "http" and would be wrong.</span>
+<span class="c"># Trust the forwarded value, falling back to $scheme for local curl tests.</span>
+map $http_x_forwarded_proto $fwd_proto {
+    default $scheme;
+    https   https;
+    http    http;
+}
+
+server {
+    listen 80;
+    server_name _;                <span class="c"># the tunnel decides the hostname</span>
+
+    client_max_body_size 12m;     <span class="c"># floor-plan uploads up to 10 MB</span>
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location /api/ {
+        proxy_pass http://backend:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;   <span class="c"># ← was $scheme</span>
+        proxy_read_timeout 60s;
+    }
+
+    location /uploads/ {
+        proxy_pass http://backend:3000;
+        proxy_set_header Host $host;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    location / {
+        proxy_pass http://frontend:80;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;   <span class="c"># ← was $scheme</span>
+    }
+}</pre>
+      </div>
+
+      <div class="tip">
+        <b>Delete the commented-out 443 block</b> at the bottom of the existing file.
+        With a tunnel there is no certificate on this box and that block can only
+        ever mislead the next person to read it.
+      </div>
+    </section>
+
+    <!-- ── TUNNEL ────────────────────────────────────────────────────────── -->
+    <section id="tunnel">
+      <h2><span class="stepnum cf">7</span> Create the tunnel</h2>
+      <p class="lead">
+        Two ways. <b>Option A</b> (dashboard) is faster and self-heals if you change
+        routes. <b>Option B</b> (CLI) keeps routing in version control. Pick one.
+      </p>
+
+      <h3>Option A — remotely-managed, via the Zero Trust dashboard</h3>
+      <ol>
+        <li>Go to <a href="https://one.dash.cloudflare.com" target="_blank" rel="noopener">one.dash.cloudflare.com</a>
+          → <b>Networks</b> → <b>Tunnels</b> → <b>Create a tunnel</b>.</li>
+        <li>Choose <b>Cloudflared</b> as the connector type.</li>
+        <li>Name it <code class="inline"><span class="v" data-var="tunnel"></span></code> → <b>Save</b>.</li>
+        <li>On the install screen, ignore the install commands — <b>copy the token</b>
+          (the long string after <code class="inline">--token</code>) into
+          <code class="inline">CLOUDFLARE_TUNNEL_TOKEN</code> in your
+          <code class="inline">.env</code>.</li>
+        <li>Open the <b>Public Hostnames</b> tab → <b>Add a public hostname</b>:</li>
+      </ol>
+
+      <table>
+        <thead><tr><th>Field</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Subdomain</td><td><code>ops</code> <span class="small">(whatever is left of your zone)</span></td></tr>
+          <tr><td>Domain</td><td>your zone, e.g. <code>example.com</code></td></tr>
+          <tr><td>Path</td><td><i>leave empty</i></td></tr>
+          <tr><td>Type</td><td><code>HTTP</code></td></tr>
+          <tr><td>URL</td><td><code>nginx:80</code> &nbsp;<span class="tag opt">container name, not localhost</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <b>The single most common mistake:</b> entering
+        <code class="inline">localhost:80</code> or <code class="inline">127.0.0.1:80</code>
+        as the service URL. Inside the <code class="inline">cloudflared</code> container,
+        <code class="inline">localhost</code> is <em>that container</em> — not nginx,
+        not the host. It must be <code class="inline">nginx:80</code>, resolved by
+        Docker's DNS on the shared <code class="inline">opsnet</code> network. This is
+        also why <code class="inline">cloudflared</code> must be on
+        <code class="inline">networks: [opsnet]</code>.
+      </div>
+
+      <p>Saving the public hostname <b>creates the DNS record for you</b> — §8 is then just verification.</p>
+
+      <hr>
+
+      <h3>Option B — locally-managed, config in git</h3>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS — one-time, interactive</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># Authenticate: prints a URL, opens a browser, pick your zone.</span>
+<span class="c"># Writes ~/.cloudflared/cert.pem</span>
+docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
+  cloudflare/cloudflared:latest tunnel login
+
+<span class="c"># Create the tunnel — writes ~/.cloudflared/&lt;TUNNEL-ID&gt;.json</span>
+docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
+  cloudflare/cloudflared:latest tunnel create {{tunnel}}
+
+<span class="c"># Route DNS at it (creates the proxied CNAME)</span>
+docker run -it --rm -v ~/.cloudflared:/home/nonroot/.cloudflared \
+  cloudflare/cloudflared:latest tunnel route dns {{tunnel}} {{domain}}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">cloudflared/config.yml</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
+<pre>tunnel: &lt;TUNNEL-ID&gt;
+credentials-file: /etc/cloudflared/&lt;TUNNEL-ID&gt;.json
+
+ingress:
+  - hostname: {{domain}}
+    service: http://nginx:80
+  <span class="c"># Catch-all is REQUIRED and must be last, or cloudflared won't start.</span>
+  - service: http_status:404</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">docker-compose.yml — Option B variant</span><span class="lang">yaml</span><button class="copy">Copy</button></div>
+<pre>  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on: [nginx]
+    networks: [opsnet]</pre>
+      </div>
+
+      <div class="danger">
+        <b>Add <code class="inline">cloudflared/*.json</code> to
+        <code class="inline">.gitignore</code>.</b> The credentials file is the
+        tunnel's private key. Committing it hands anyone with repo access the ability
+        to serve traffic on your hostname.
+      </div>
+    </section>
+
+    <!-- ── DNS ───────────────────────────────────────────────────────────── -->
+    <section id="dns">
+      <h2><span class="stepnum cf">8</span> DNS</h2>
+      <p class="lead">
+        Either path above created the record. You are verifying, not creating —
+        unless something went wrong.
+      </p>
+
+      <p>In the Cloudflare dashboard → your zone → <b>DNS</b> → <b>Records</b>:</p>
+
+      <table>
+        <thead><tr><th>Type</th><th>Name</th><th>Target</th><th>Proxy</th><th>TTL</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>CNAME</code></td>
+            <td><code>ops</code></td>
+            <td><code>&lt;TUNNEL-ID&gt;.cfargotunnel.com</code></td>
+            <td><span class="tag yes">Proxied 🟠</span></td>
+            <td>Auto</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <b>The proxy toggle must be orange.</b> A grey-cloud (DNS-only)
+        <code class="inline">.cfargotunnel.com</code> record cannot resolve for
+        visitors — that hostname only means something <em>inside</em> Cloudflare's
+        network. Grey cloud here produces an immediate, total outage with a
+        confusing NXDOMAIN.
+      </div>
+
+      <p>Check it from your laptop:</p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">local</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>dig +short {{domain}}
+<span class="c"># → two Cloudflare anycast IPs (104.x / 172.67.x), NOT your VPS IP.</span>
+<span class="c">#   Seeing your VPS IP means the record is grey-clouded or points at an A record.</span></pre>
+      </div>
+
+      <h3>SSL/TLS mode</h3>
+      <p>
+        Zone → <b>SSL/TLS</b> → <b>Overview</b> → set encryption mode to
+        <b>Full (strict)</b>. The edge-to-origin hop runs inside the tunnel's own
+        encrypted connection, so there is no origin certificate to install — but
+        <b>Flexible</b> is still the wrong choice and can produce redirect loops.
+        While you're there, turn on <b>Always Use HTTPS</b>.
+      </p>
+    </section>
+
+    <!-- ── RUN ───────────────────────────────────────────────────────────── -->
+    <section id="run">
+      <h2><span class="stepnum">9</span> First run</h2>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>cd ~/{{dir}}
+
+<span class="c"># Build the two app images and start all five services</span>
+docker compose up -d --build
+
+<span class="c"># Watch them come up — cloudflared should log "Registered tunnel connection"</span>
+docker compose ps
+docker compose logs -f cloudflared</pre>
+      </div>
+
+      <p>The database starts <b>completely empty</b> — no tables, no users. Create both:</p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">schema + first admin</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># Create the tables (drizzle-kit push)</span>
+docker compose exec backend bun run db:push
+
+<span class="c"># Create exactly one admin user — no demo data</span>
+docker compose exec \
+  -e ADMIN_EMAIL=you@company.com \
+  -e ADMIN_PASSWORD='a-long-unique-password' \
+  backend bun run db:seed:admin</pre>
+      </div>
+
+      <div class="danger">
+        <b>Never run <code class="inline">bun run db:seed</code> here.</b> It
+        <b>deletes every row in every table</b> and loads prototype demo data. It
+        refuses under <code class="inline">NODE_ENV=production</code> (which the
+        backend Dockerfile sets), and the demo bundle it needs
+        (<code class="inline">_extracted/</code>) is gitignored — two guards you
+        should not go looking for a way around.
+        <code class="inline">db:seed:admin</code> is the production command.
+      </div>
+    </section>
+
+    <!-- ── GOOGLE ────────────────────────────────────────────────────────── -->
+    <section id="google">
+      <h2><span class="stepnum">10</span> Google sign-in (optional)</h2>
+      <p class="lead">
+        Leave <code class="inline">GOOGLE_CLIENT_ID</code> blank to skip this
+        entirely — <code class="inline">GET /api/auth/providers</code> reports
+        <code class="inline">{google:false}</code> and the button disappears from the
+        login page.
+      </p>
+
+      <ol>
+        <li>Google Cloud Console → <b>APIs &amp; Services</b> → <b>Credentials</b> →
+          <b>Create OAuth client ID</b> → <b>Web application</b>.</li>
+        <li><b>Authorised JavaScript origins:</b>
+          <code class="inline">https://<span class="v" data-var="domain"></span></code></li>
+        <li><b>Authorised redirect URIs</b> — must match byte-for-byte:
+          <code class="inline">https://<span class="v" data-var="domain"></span>/api/auth/google/callback</code></li>
+        <li>Put the client ID and secret in <code class="inline">.env</code>, then
+          <code class="inline">docker compose up -d backend</code>.</li>
+      </ol>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">.env — Google block</span><span class="lang">env</span><button class="copy">Copy</button></div>
+<pre><span class="k">GOOGLE_CLIENT_ID</span>=<span class="s">1234567890-abcdef.apps.googleusercontent.com</span>
+<span class="k">GOOGLE_CLIENT_SECRET</span>=<span class="s">GOCSPX-xxxxxxxxxxxxxxxx</span>
+
+<span class="c"># Only this email domain is auto-provisioned on first Google sign-in.</span>
+<span class="c"># Leave BLANK and no new accounts are ever created automatically —</span>
+<span class="c"># existing users can still link their Google identity and sign in.</span>
+<span class="k">GOOGLE_ALLOWED_DOMAIN</span>=<span class="s">company.com</span></pre>
+      </div>
+
+      <div class="note">
+        <b>Where the redirect URI comes from:</b>
+        <code class="inline">backend/src/lib/google-oauth.ts:35-37</code> builds it as
+        <code class="inline">FRONTEND_URL + /api/auth/google/callback</code>. If your
+        Cloudflare hostname differs from <code class="inline">FRONTEND_URL</code> for
+        any reason, override it explicitly with
+        <code class="inline">GOOGLE_REDIRECT_URI</code> — but note that
+        <code class="inline">docker-compose.yml</code> does not currently pass that
+        variable through to the backend, so you'd need to add it to the service's
+        <code class="inline">environment:</code> block first.
+      </div>
+    </section>
+
+    <!-- ── FIREWALL ──────────────────────────────────────────────────────── -->
+    <section id="firewall">
+      <h2><span class="stepnum">11</span> Close the firewall</h2>
+      <p class="lead">
+        The tunnel is only a security win if the front door is actually locked. Nothing
+        needs to reach this box from the internet except SSH.
+      </p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp        <span class="c"># SSH — do NOT lock yourself out</span>
+sudo ufw enable
+sudo ufw status verbose
+
+<span class="c"># 80 and 443 are deliberately absent. If a previous deploy opened them:</span>
+sudo ufw delete allow 80/tcp
+sudo ufw delete allow 443/tcp</pre>
+      </div>
+
+      <div class="warn">
+        <b>ufw does not filter published Docker ports.</b> Docker writes its own
+        iptables rules ahead of ufw's chain, so a container with
+        <code class="inline">ports: "80:80"</code> stays reachable from the internet
+        even with ufw denying 80. That is exactly why §5.1 deletes the
+        <code class="inline">ports:</code> block rather than relying on the firewall.
+        Confirm nothing is published:
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">verify nothing is exposed</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>docker compose ps --format 'table {{.Service}}\t{{.Ports}}'
+<span class="c"># The PORTS column must be empty for every service.</span>
+
+sudo ss -tlnp | grep -E ':(80|443)\s'
+<span class="c"># Should print nothing at all.</span></pre>
+      </div>
+    </section>
+
+    <!-- ── VERIFY ────────────────────────────────────────────────────────── -->
+    <section id="verify">
+      <h2><span class="stepnum">12</span> Verify</h2>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">from anywhere</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># API health through the full path: edge → tunnel → nginx → backend</span>
+curl -s https://{{domain}}/api/health
+<span class="c"># → {"status":"ok",...}</span>
+
+<span class="c"># Confirm Cloudflare is actually in front (cf-ray header present)</span>
+curl -sI https://{{domain}} | grep -i -E 'cf-ray|server'
+
+<span class="c"># Which sign-in methods the server offers</span>
+curl -s https://{{domain}}/api/auth/providers
+<span class="c"># → {"google":false}  (or true once §10 is configured)</span></pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS — internal path only</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre><span class="c"># nginx is reachable on the Docker network but NOT from the host's port 80</span>
+docker compose exec cloudflared wget -qO- http://nginx:80/api/health
+
+<span class="c"># Tunnel connection state — expect 4 healthy connections to Cloudflare edge</span>
+docker compose logs cloudflared | grep -i 'registered tunnel connection'</pre>
+      </div>
+
+      <p>Then open <code class="inline">https://<span class="v" data-var="domain"></span></code> and sign in with the admin you created in §9.</p>
+    </section>
+
+    <!-- ── HARDEN ────────────────────────────────────────────────────────── -->
+    <section id="harden">
+      <h2><span class="stepnum cf">13</span> Cloudflare hardening</h2>
+      <p class="lead">Optional, but this is most of the value of routing through Cloudflare at all.</p>
+
+      <h3>Cloudflare Access — SSO in front of the whole app</h3>
+      <p>
+        Zero Trust → <b>Access</b> → <b>Applications</b> → <b>Add an application</b> →
+        <b>Self-hosted</b>. Point it at
+        <code class="inline"><span class="v" data-var="domain"></span></code> and add a
+        policy such as <i>emails ending in <code class="inline">@company.com</code></i>.
+        Visitors now authenticate at Cloudflare's edge <b>before a single request
+        reaches your VPS</b>.
+      </p>
+
+      <div class="warn">
+        <b>Access sits in front of the API too</b> — including
+        <code class="inline">/api/auth/google/callback</code>, which Google needs to
+        reach without a session. If you enable Access <i>and</i> Google sign-in, add a
+        <b>Bypass</b> policy for the path <code class="inline">/api/auth/google/*</code>,
+        or the OAuth round-trip will dead-end at a Cloudflare login screen.
+      </div>
+
+      <h3>Cache rules</h3>
+      <p>
+        The SPA's hashed assets are safe to cache; the API never is. Zone → <b>Caching</b>
+        → <b>Cache Rules</b>:
+      </p>
+      <ul>
+        <li><b>Bypass cache</b> when URI path starts with <code class="inline">/api/</code></li>
+        <li><b>Bypass cache</b> when URI path starts with <code class="inline">/uploads/</code>
+          <span class="small">— or cache it; nginx already sets <code>expires 7d</code>, and floor plans rarely change</span></li>
+      </ul>
+
+      <h3>WAF and rate limiting</h3>
+      <ul>
+        <li>Security → <b>WAF</b> → enable the <b>Cloudflare Managed Ruleset</b>.</li>
+        <li>Add a rate-limiting rule on <code class="inline">/api/auth/login</code> —
+          say 10 requests per minute per IP. The app has <b>no</b> login throttling of
+          its own, so this is your only brute-force defence.</li>
+        <li>Optionally restrict by country if all your staff are in one place.</li>
+      </ul>
+
+      <div class="note">
+        <b>Worth knowing about the app's session model:</b> tokens are stateless
+        24-hour JWTs with no server-side session table, and
+        <code class="inline">authMiddleware</code> never re-checks
+        <code class="inline">users.status</code>. Suspending a user does not
+        invalidate their existing token, and neither does signing out. Cloudflare
+        Access is currently the only practical way to cut off a departing employee
+        immediately.
+      </div>
+    </section>
+
+    <!-- ── OPS ───────────────────────────────────────────────────────────── -->
+    <section id="ops">
+      <h2><span class="stepnum">14</span> Day-2 operations</h2>
+
+      <h3>Deploy an update</h3>
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>cd ~/{{dir}}
+git pull
+docker compose up -d --build
+
+<span class="c"># If the schema changed:</span>
+docker compose exec backend bun run db:push
+
+<span class="c"># Reclaim space from superseded images</span>
+docker image prune -f</pre>
+      </div>
+
+      <h3>Logs</h3>
+      <div class="code-card">
+        <div class="code-head"><span class="fn">on the VPS</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>docker compose logs -f --tail 100 backend
+docker compose logs -f --tail 100 cloudflared
+docker compose logs -f nginx</pre>
+      </div>
+
+      <h3>Back up the database and uploads</h3>
+      <div class="code-card">
+        <div class="code-head"><span class="fn">backup.sh</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>#!/usr/bin/env bash
+set -euo pipefail
+cd ~/{{dir}}
+STAMP=$(date +%F-%H%M)
+mkdir -p ~/backups
+
+<span class="c"># Postgres logical dump</span>
+docker compose exec -T db pg_dump -U opsmonitor opsmonitor \
+  | gzip &gt; ~/backups/opsmonitor-$STAMP.sql.gz
+
+<span class="c"># Uploaded floor-plan images (named volume, not a bind mount)</span>
+docker run --rm \
+  -v ops-monitor_uploads:/data:ro \
+  -v ~/backups:/out alpine \
+  tar czf /out/uploads-$STAMP.tar.gz -C /data .
+
+<span class="c"># Keep 14 days</span>
+find ~/backups -name '*.gz' -mtime +14 -delete</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="fn">schedule it</span><span class="lang">bash</span><button class="copy">Copy</button></div>
+<pre>chmod +x ~/backup.sh
+( crontab -l 2&gt;/dev/null; echo "15 3 * * * ~/backup.sh" ) | crontab -</pre>
+      </div>
+
+      <div class="warn">
+        <b>The volume name is prefixed by the project name.</b>
+        <code class="inline">docker-compose.yml</code> declares
+        <code class="inline">name: ops-monitor</code>, so the volumes are
+        <code class="inline">ops-monitor_uploads</code> and
+        <code class="inline">ops-monitor_pgdata</code>. Confirm with
+        <code class="inline">docker volume ls</code> before trusting the backup script.
+      </div>
+    </section>
+
+    <!-- ── TROUBLE ───────────────────────────────────────────────────────── -->
+    <section id="trouble">
+      <h2><span class="stepnum">15</span> Troubleshooting</h2>
+
+      <table>
+        <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Error 1033</b><br><span class="small">Argo Tunnel error</span></td>
+            <td>No connector registered — <code>cloudflared</code> is down or the token is wrong</td>
+            <td><code>docker compose logs cloudflared</code>; re-copy the token into <code>.env</code>, then <code>docker compose up -d cloudflared</code></td>
+          </tr>
+          <tr>
+            <td><b>Error 502 / 1016</b></td>
+            <td>Service URL points somewhere that isn't nginx</td>
+            <td>Public hostname URL must be <code>nginx:80</code>, and <code>cloudflared</code> must be on <code>networks: [opsnet]</code></td>
+          </tr>
+          <tr>
+            <td><b>DNS doesn't resolve</b></td>
+            <td>CNAME is grey-clouded (DNS-only)</td>
+            <td>Toggle the proxy to orange. <code>.cfargotunnel.com</code> is meaningless unproxied</td>
+          </tr>
+          <tr>
+            <td><b>Redirect loop</b></td>
+            <td>SSL/TLS mode set to Flexible</td>
+            <td>Set <b>Full (strict)</b> in the zone's SSL/TLS settings</td>
+          </tr>
+          <tr>
+            <td><b>Google sign-in: <code>redirect_uri_mismatch</code></b></td>
+            <td><code>FRONTEND_URL</code> is <code>http://</code>, has a trailing slash, or the console URI differs</td>
+            <td>Set <code>FRONTEND_URL=https://<span class="v" data-var="domain"></span></code> exactly, recreate the backend, match the console byte-for-byte</td>
+          </tr>
+          <tr>
+            <td><b>Google sign-in: "session expired"</b></td>
+            <td>The state cookie was dropped — usually a scheme mismatch</td>
+            <td>Confirm §6's <code>$fwd_proto</code> map is in place so the backend sees <code>https</code></td>
+          </tr>
+          <tr>
+            <td><b>Uploads fail at ~1 MB</b></td>
+            <td><code>client_max_body_size</code> missing from a server block</td>
+            <td>Keep <code>client_max_body_size 12m;</code> in <code>default.conf</code></td>
+          </tr>
+          <tr>
+            <td><b>All client IPs look like <code>172.x.x.x</code></b></td>
+            <td><code>real_ip</code> directives missing</td>
+            <td>Apply the <code>set_real_ip_from</code> / <code>CF-Connecting-IP</code> block from §6</td>
+          </tr>
+          <tr>
+            <td><b><code>db:push</code> hangs</b></td>
+            <td>Postgres not healthy yet</td>
+            <td><code>docker compose ps</code> — wait for <code>db</code> to be <code>healthy</code>, then retry</td>
+          </tr>
+          <tr>
+            <td><b>Build OOM-killed</b></td>
+            <td>Under 2 GB RAM</td>
+            <td>Add swap: <code>fallocate -l 2G /swapfile &amp;&amp; mkswap /swapfile &amp;&amp; swapon /swapfile</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── CHECKLIST ─────────────────────────────────────────────────────── -->
+    <section id="checklist">
+      <h2><span class="stepnum">16</span> Go-live checklist</h2>
+      <p class="lead">Click to tick. Saved in this browser.</p>
+
+      <ul class="checklist">
+        <li data-check="demo"><span class="box"></span><span class="txt"><b>Demo accounts removed</b> from <code>login.tsx</code> and the <span class="mono">"Try a demo account below."</span> string from <code>auth.ts</code></span></li>
+        <li data-check="secrets"><span class="box"></span><span class="txt"><b><code>JWT_SECRET</code> and <code>POSTGRES_PASSWORD</code></b> are freshly generated, not the examples</span></li>
+        <li data-check="env"><span class="box"></span><span class="txt"><b><code>FRONTEND_URL</code></b> is <code>https://<span class="v" data-var="domain"></span></code> with no trailing slash</span></li>
+        <li data-check="ports"><span class="box"></span><span class="txt"><b>No published ports</b> — <code>docker compose ps</code> shows an empty PORTS column</span></li>
+        <li data-check="ufw"><span class="box"></span><span class="txt"><b>ufw</b> allows 22 only; 80 and 443 are closed</span></li>
+        <li data-check="proxy"><span class="box"></span><span class="txt"><b>DNS record is proxied</b> (orange cloud) and <code>dig</code> returns Cloudflare IPs</span></li>
+        <li data-check="tls"><span class="box"></span><span class="txt"><b>SSL/TLS mode</b> is Full (strict), Always Use HTTPS is on</span></li>
+        <li data-check="realip"><span class="box"></span><span class="txt"><b>nginx</b> has the <code>real_ip</code> block and <code>$fwd_proto</code> map</span></li>
+        <li data-check="admin"><span class="box"></span><span class="txt"><b><code>db:seed:admin</code></b> ran; <code>db:seed</code> never did</span></li>
+        <li data-check="ratelimit"><span class="box"></span><span class="txt"><b>Rate limit</b> configured on <code>/api/auth/login</code></span></li>
+        <li data-check="backup"><span class="box"></span><span class="txt"><b>Backup cron</b> installed and one restore tested</span></li>
+        <li data-check="health"><span class="box"></span><span class="txt"><b><code>curl https://<span class="v" data-var="domain"></span>/api/health</code></b> returns <code>{"status":"ok"}</code></span></li>
+      </ul>
+    </section>
+
+    <footer class="pagefoot">
+      Ops Monitor — production deployment via Cloudflare Tunnel.
+      Companion to <a href="how-to-deploy.md">how-to-deploy.md</a> (port-forward + certbot)
+      and <a href="deployment.html">deployment.html</a>.
+      Verified against <code>docker-compose.yml</code>, <code>nginx/conf.d/default.conf</code>,
+      <code>backend/Dockerfile</code> and <code>backend/src/lib/google-oauth.ts</code>.
+    </footer>
+
+  </main>
+</div>
+
+<script src="assets/deploy-production.js"></script>
+</body>
+</html>

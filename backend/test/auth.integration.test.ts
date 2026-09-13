@@ -126,16 +126,31 @@ suite('auth routes (integration)', () => {
     expect(body.token).toBeUndefined(); // no session is issued
   });
 
-  test('GET /api/auth/providers reports whether Google sign-in is configured', async () => {
-    const res = await api('/api/auth/providers');
-    expect(res.status).toBe(200);
+  // Asserting `google === Boolean(CLIENT_ID && CLIENT_SECRET)` would just
+  // recompute the implementation's own condition from the same environment and
+  // pass even if the endpoint were inverted. Pin the actual expected value for
+  // the environment instead, and state which environment that is.
+  const googleConfigured = Boolean(
+    process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim()
+  );
 
-    const body = await res.json();
-    expect(typeof body.google).toBe('boolean');
-    expect(body.google).toBe(
-      Boolean(process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim())
-    );
-  });
+  test.skipIf(googleConfigured)(
+    'GET /api/auth/providers reports Google as unavailable when it is unconfigured',
+    async () => {
+      const res = await api('/api/auth/providers');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ google: false });
+    }
+  );
+
+  test.skipIf(!googleConfigured)(
+    'GET /api/auth/providers reports Google as available when it is configured',
+    async () => {
+      const res = await api('/api/auth/providers');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ google: true });
+    }
+  );
 
   test('a protected route rejects a missing or garbage bearer token', async () => {
     expect((await api('/api/auth/me')).status).toBe(401);

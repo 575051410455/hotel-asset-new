@@ -91,9 +91,7 @@ fi
 # ── EXISTING cloudflared (the thing we most need to know about) ──────────────
 h "Existing cloudflared"
 if have docker && docker info >/dev/null 2>&1; then
-  CF=$(docker ps --filter ancestor=cloudflare/cloudflared --format '{{.ID}}' 2>/dev/null)
-  CF2=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null | grep -i cloudflared | awk '{print $1}')
-  CF=$(printf '%s\n%s\n' "$CF" "$CF2" | sort -u | sed '/^$/d')
+  CF=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null | grep -i cloudflared | awk '{print $1}')
 
   if [ -z "$CF" ]; then
     wn "no running cloudflared container found"
@@ -120,7 +118,7 @@ if have docker && docker info >/dev/null 2>&1; then
       kv "  cmd"            "${CMD:-?}"
     done
     printf '\n'
-    wn "DECISION NEEDED: reuse this tunnel for map.csprint.co.th, or run a second one?"
+    wn "NEEDED: the \"networks\" value above goes into this project's compose as an external network."
   fi
 
   h "Docker networks"
@@ -151,7 +149,7 @@ if [ -f docker-compose.yml ]; then
   kv "compose project name" "$(awk -F': *' '/^name:/{print $2; exit}' docker-compose.yml)"
   if [ -f .env ]; then
     ok ".env present"
-    for k in FRONTEND_URL POSTGRES_PASSWORD JWT_SECRET CLOUDFLARE_TUNNEL_TOKEN GOOGLE_CLIENT_ID; do
+    for k in FRONTEND_URL POSTGRES_PASSWORD JWT_SECRET GOOGLE_CLIENT_ID; do
       v=$(grep -E "^${k}=" .env 2>/dev/null | head -1 | cut -d= -f2-)
       case "$k" in
         FRONTEND_URL) kv "$k" "${v:-<unset>}" ;;                      # not a secret
