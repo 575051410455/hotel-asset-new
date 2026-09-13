@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { zValidator } from '@hono/zod-validator';
 import bcrypt from 'bcryptjs';
 import { db } from '../db';
@@ -35,6 +35,57 @@ const ROLE_NAMES: Record<string, string> = {
   manager: 'IT Manager',
   viewer: 'Viewer',
 };
+
+// Check that every id the caller referenced actually exists, BEFORE writing
+// anything. Without this a bad id reaches Postgres as a foreign-key violation,
+// which escapes as an unhandled 500 — a dead end for a caller who only picked a
+// property that no longer exists. Returns one message per problem, or [] if all
+// the references resolve.
+async function missingRefs(refs: {
+  hotelIds?: string[];
+  roleIds?: string[];
+  userIds?: number[];
+  groupIds?: number[];
+}): Promise<string[]> {
+  const problems: string[] = [];
+
+  const check = async <T extends string | number>(
+    ids: T[] | undefined,
+    load: (unique: T[]) => Promise<T[]>,
+    label: string
+  ) => {
+    const unique = [...new Set(ids ?? [])];
+    if (!unique.length) return;
+    const found = new Set(await load(unique));
+    const missing = unique.filter((id) => !found.has(id));
+    if (missing.length) {
+      problems.push(`Unknown ${label}: ${missing.join(', ')}.`);
+    }
+  };
+
+  await check(
+    refs.hotelIds,
+    async (ids) => (await db.select({ id: hotels.id }).from(hotels).where(inArray(hotels.id, ids))).map((r) => r.id),
+    'property'
+  );
+  await check(
+    refs.roleIds,
+    async (ids) => (await db.select({ id: roles.id }).from(roles).where(inArray(roles.id, ids))).map((r) => r.id),
+    'role'
+  );
+  await check(
+    refs.userIds,
+    async (ids) => (await db.select({ id: users.id }).from(users).where(inArray(users.id, ids))).map((r) => r.id),
+    'user'
+  );
+  await check(
+    refs.groupIds,
+    async (ids) => (await db.select({ id: groups.id }).from(groups).where(inArray(groups.id, ids))).map((r) => r.id),
+    'group'
+  );
+
+  return problems;
+}
 
 // Gate every request on the caller's global `access` permission.
 async function gate(userId: number, level: 'read' | 'crud') {
@@ -233,10 +284,22 @@ accessRoutes.put('/users/:id/assignments', authMiddleware, zValidator('json', as
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
   if (!target) return c.json({ error: 'User not found' }, 404);
   const { assignments: rows } = c.req.valid('json');
-  await db.delete(assignments).where(eq(assignments.userId, id));
-  if (rows.length) {
-    await db.insert(assignments).values(rows.map((a) => ({ userId: id, hotelId: a.hotelId, roleId: a.roleId })));
-  }
+
+  const problems = await missingRefs({
+    hotelIds: rows.map((a) => a.hotelId),
+    roleIds: rows.map((a) => a.roleId),
+  });
+  if (problems.length) return c.json({ error: problems.join(' ') }, 400);
+
+  // One transaction. This replaces the user's grants by clearing them first, so
+  // a failure half-way would otherwise strip every property they had.
+  await db.transaction(async (tx) => {
+    await tx.delete(assignments).where(eq(assignments.userId, id));
+    if (rows.length) {
+      await tx.insert(assignments).values(rows.map((a) => ({ userId: id, hotelId: a.hotelId, roleId: a.roleId })));
+    }
+  });
+
   return c.json({ ok: true });
 });
 
@@ -248,10 +311,18 @@ accessRoutes.put('/users/:id/groups', authMiddleware, zValidator('json', members
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
   if (!target) return c.json({ error: 'User not found' }, 404);
   const { groupIds } = c.req.valid('json');
-  await db.delete(groupMembers).where(eq(groupMembers.userId, id));
-  if (groupIds.length) {
-    await db.insert(groupMembers).values(groupIds.map((gid) => ({ userId: id, groupId: gid })));
-  }
+
+  const problems = await missingRefs({ groupIds });
+  if (problems.length) return c.json({ error: problems.join(' ') }, 400);
+
+  // Same replace-by-clearing shape as assignments, so same atomic boundary.
+  await db.transaction(async (tx) => {
+    await tx.delete(groupMembers).where(eq(groupMembers.userId, id));
+    if (groupIds.length) {
+      await tx.insert(groupMembers).values(groupIds.map((gid) => ({ userId: id, groupId: gid })));
+    }
+  });
+
   return c.json({ ok: true });
 });
 
@@ -295,14 +366,17 @@ accessRoutes.delete('/roles/:id', authMiddleware, async (c) => {
 });
 
 // ── Group mutations ───────────────────────────────────────────────────────────
-async function setGroupRelations(groupId: number, hotelIds: string[], memberIds: number[]) {
-  await db.delete(groupHotels).where(eq(groupHotels.groupId, groupId));
+// `tx` is the transaction handle, so the caller decides the atomic boundary.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function setGroupRelations(tx: Tx, groupId: number, hotelIds: string[], memberIds: number[]) {
+  await tx.delete(groupHotels).where(eq(groupHotels.groupId, groupId));
   if (hotelIds.length) {
-    await db.insert(groupHotels).values(hotelIds.map((hotelId) => ({ groupId, hotelId })));
+    await tx.insert(groupHotels).values(hotelIds.map((hotelId) => ({ groupId, hotelId })));
   }
-  await db.delete(groupMembers).where(eq(groupMembers.groupId, groupId));
+  await tx.delete(groupMembers).where(eq(groupMembers.groupId, groupId));
   if (memberIds.length) {
-    await db.insert(groupMembers).values(memberIds.map((userId) => ({ groupId, userId })));
+    await tx.insert(groupMembers).values(memberIds.map((userId) => ({ groupId, userId })));
   }
 }
 
@@ -310,8 +384,22 @@ accessRoutes.post('/groups', authMiddleware, zValidator('json', createGroupSchem
   const { ok } = await gate(Number(c.get('userId')), 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const body = c.req.valid('json');
-  const [created] = await db.insert(groups).values({ name: body.name, roleId: body.roleId }).returning();
-  await setGroupRelations(created.id, body.hotelIds, body.memberIds);
+
+  const problems = await missingRefs({
+    hotelIds: body.hotelIds,
+    roleIds: [body.roleId],
+    userIds: body.memberIds,
+  });
+  if (problems.length) return c.json({ error: problems.join(' ') }, 400);
+
+  // One transaction: a group row must never survive a failure to attach its
+  // properties or members, or the list fills with empty unusable groups.
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx.insert(groups).values({ name: body.name, roleId: body.roleId }).returning();
+    await setGroupRelations(tx, row.id, body.hotelIds, body.memberIds);
+    return row;
+  });
+
   return c.json(created, 201);
 });
 
@@ -320,21 +408,41 @@ accessRoutes.patch('/groups/:id', authMiddleware, zValidator('json', updateGroup
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const id = Number(c.req.param('id'));
   const body = c.req.valid('json');
-  const fields: Record<string, unknown> = {};
-  if (body.name !== undefined) fields.name = body.name;
-  if (body.roleId !== undefined) fields.roleId = body.roleId;
-  if (Object.keys(fields).length) {
-    const [updated] = await db.update(groups).set(fields).where(eq(groups.id, id)).returning();
-    if (!updated) return c.json({ error: 'Group not found' }, 404);
-  }
-  if (body.hotelIds !== undefined) {
-    await db.delete(groupHotels).where(eq(groupHotels.groupId, id));
-    if (body.hotelIds.length) await db.insert(groupHotels).values(body.hotelIds.map((hotelId) => ({ groupId: id, hotelId })));
-  }
-  if (body.memberIds !== undefined) {
-    await db.delete(groupMembers).where(eq(groupMembers.groupId, id));
-    if (body.memberIds.length) await db.insert(groupMembers).values(body.memberIds.map((userId) => ({ groupId: id, userId })));
-  }
+
+  const [existing] = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, id)).limit(1);
+  if (!existing) return c.json({ error: 'Group not found' }, 404);
+
+  const problems = await missingRefs({
+    hotelIds: body.hotelIds,
+    roleIds: body.roleId !== undefined ? [body.roleId] : undefined,
+    userIds: body.memberIds,
+  });
+  if (problems.length) return c.json({ error: problems.join(' ') }, 400);
+
+  // One transaction: the old properties and members are cleared as part of the
+  // same unit that writes the new ones, so a failure can't leave the group with
+  // nothing attached.
+  await db.transaction(async (tx) => {
+    const fields: Record<string, unknown> = {};
+    if (body.name !== undefined) fields.name = body.name;
+    if (body.roleId !== undefined) fields.roleId = body.roleId;
+    if (Object.keys(fields).length) {
+      await tx.update(groups).set(fields).where(eq(groups.id, id));
+    }
+    if (body.hotelIds !== undefined) {
+      await tx.delete(groupHotels).where(eq(groupHotels.groupId, id));
+      if (body.hotelIds.length) {
+        await tx.insert(groupHotels).values(body.hotelIds.map((hotelId) => ({ groupId: id, hotelId })));
+      }
+    }
+    if (body.memberIds !== undefined) {
+      await tx.delete(groupMembers).where(eq(groupMembers.groupId, id));
+      if (body.memberIds.length) {
+        await tx.insert(groupMembers).values(body.memberIds.map((userId) => ({ groupId: id, userId })));
+      }
+    }
+  });
+
   return c.json({ ok: true });
 });
 
