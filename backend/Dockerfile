@@ -4,7 +4,8 @@ FROM oven/bun:1-alpine
 WORKDIR /app
 
 # Install deps first for better layer caching. bun.lock pins versions;
-# devDeps (incl. drizzle-kit) are included so `db:push` works in-container.
+# devDeps (incl. drizzle-kit) are included so `db:generate` works in-container;
+# the schema itself is applied with `bun run db:migrate`.
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 

@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { and, eq, asc, isNull, sql } from 'drizzle-orm';
+import { and, eq, asc, isNull, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { db } from '../db';
@@ -23,13 +23,15 @@ floorRoutes.get('/', authMiddleware, zValidator('query', listQuery), async (c) =
 
   const ctx = await buildUserContext(userId);
   // Reading floor plans needs `floors` (or `cctv` for cctv-kind) read access.
-  const resource = kind === 'cctv' ? 'cctv' : 'floors';
-  if (!canAccess(ctx, hotelId, resource, 'read')) {
+  const allowedKinds = (['workstation', 'cctv'] as const).filter((candidate) =>
+    (!kind || kind === candidate) &&
+    canAccess(ctx, hotelId, candidate === 'cctv' ? 'cctv' : 'floors', 'read')
+  );
+  if (!allowedKinds.length) {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  const conds = [eq(floors.hotelId, hotelId), isNull(floors.deletedAt)];
-  if (kind) conds.push(eq(floors.kind, kind));
+  const conds = [eq(floors.hotelId, hotelId), isNull(floors.deletedAt), inArray(floors.kind, allowedKinds)];
 
   const floorRows = await db
     .select()
@@ -37,11 +39,16 @@ floorRoutes.get('/', authMiddleware, zValidator('query', listQuery), async (c) =
     .where(and(...conds))
     .orderBy(asc(floors.sortOrder));
 
-  const pinRows = await db.select().from(devices).where(eq(devices.hotelId, hotelId));
+  const pinRows = floorRows.length ? await db.select().from(devices).where(and(
+    eq(devices.hotelId, hotelId), inArray(devices.floorId, floorRows.map((floor) => floor.id))
+  )) : [];
 
   const result = floorRows.map((f) => ({
     ...f,
     pins: pinRows.filter((p) => p.floorId === f.id && p.x !== null && p.y !== null),
+    // Assigned to this floor but with no position on the plan yet — e.g. added
+    // from the inventory list. Not pins, but the map offers to place them.
+    unplaced: pinRows.filter((p) => p.floorId === f.id && (p.x === null || p.y === null)),
   }));
 
   return c.json(result);
@@ -115,6 +122,11 @@ floorRoutes.patch(
     if (!(await requireFloorsCrud(c, hotelId))) return c.json({ error: 'Forbidden' }, 403);
 
     const patch = c.req.valid('json');
+    // Unknown keys (e.g. `kind`, which is permanent) are stripped by the schema,
+    // so a body carrying only those leaves nothing to write.
+    if (Object.keys(patch).length === 0) {
+      return c.json({ error: 'Nothing to update. A floor\'s kind cannot be changed — delete it and create it again.' }, 400);
+    }
     const [updated] = await db
       .update(floors)
       .set(patch)

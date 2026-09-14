@@ -1,14 +1,15 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { SignJWT } from 'jose';
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { db } from '../db';
-import { users } from '../db/schema';
+import { users, sessions } from '../db/schema';
 import { loginSchema, changePasswordSchema, updateProfileSchema } from '../shared/types';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext } from '../lib/session';
+import { issueSession, clearSessionCookies, revokeUserSessions, sessionOrigin } from '../lib/auth-session';
+import { googleSignInDecision } from '../lib/google-identity';
 import {
   isGoogleEnabled,
   googleConfig,
@@ -17,8 +18,11 @@ import {
   verifyIdToken,
 } from '../lib/google-oauth';
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'default-secret');
 const OAUTH_STATE_COOKIE = 'om_oauth_state';
+
+// The one message for every refused Google sign-in, so the response never
+// reveals whether an account exists, is inactive, or is linked elsewhere.
+const GOOGLE_REFUSED = "This Google account can't sign in to Ops Monitor. Ask IT Operations to set up your access.";
 
 // A bcrypt hash of a discarded random string, compared against when the email
 // doesn't exist so a failed lookup costs the same time as a failed password
@@ -39,25 +43,20 @@ function publicUser(u: typeof users.$inferSelect) {
     title: u.title,
     department: u.department,
     status: u.status,
+    // Lets the page decide whether to offer User Management; the server still decides every request.
+    platformAdmin: u.platformAdmin,
     lastLogin: u.lastLogin,
     createdAt: u.createdAt,
   };
 }
 
-// Sign a 24h HS256 session token for a user id.
-function signSession(userId: number): Promise<string> {
-  return new SignJWT({ sub: String(userId) })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('24h')
-    .sign(secret);
-}
 
 // GET /api/auth/providers — which sign-in methods the server offers.
 authRoutes.get('/providers', (c) => c.json({ google: isGoogleEnabled() }));
 
 // POST /api/auth/login
 authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
+  if (c.req.header('origin') !== sessionOrigin()) return c.json({ error: 'Invalid request origin' }, 403);
   const { email, password } = c.req.valid('json');
 
   const [user] = await db
@@ -86,15 +85,15 @@ authRoutes.post('/login', zValidator('json', loginSchema), async (c) => {
   if (!valid) return c.json({ error: BAD_CREDENTIALS }, 401);
 
   if (user.status !== 'active') {
-    return c.json({ error: 'This account is suspended. Contact an administrator.' }, 403);
+    return c.json({ error: 'This account is not active. Contact an administrator.' }, 403);
   }
 
   await db.update(users).set({ lastLogin: new Date() }).where(eq(users.id, user.id));
 
-  const token = await signSession(user.id);
+  await issueSession(c, user.id, 'password');
   const ctx = await buildUserContext(user.id);
 
-  return c.json({ token, user: publicUser(user), hotels: ctx.hotels });
+  return c.json({ user: publicUser(user), hotels: ctx.hotels });
 });
 
 // ── Google OAuth (server-side Authorization Code flow) ───────────────────────
@@ -121,7 +120,7 @@ authRoutes.get('/google/start', (c) => {
 
 // GET /api/auth/google/callback — Google returns here with ?code & ?state.
 authRoutes.get('/google/callback', async (c) => {
-  const { redirectUri, allowedDomain } = googleConfig();
+  const { redirectUri } = googleConfig();
   const backTo = `${new URL(redirectUri).origin}/login`;
   const fail = (msg: string) => c.redirect(`${backTo}#error=${encodeURIComponent(msg)}`);
 
@@ -147,59 +146,52 @@ authRoutes.get('/google/callback', async (c) => {
     return fail('Could not verify your Google account. Please try again.');
   }
 
-  if (!profile.emailVerified) return fail('Your Google email is not verified.');
-
-  // Domain gate: only auto-provision (and only admit) emails on the allowed
-  // domain. Without a configured domain we admit only pre-existing accounts.
-  const emailDomain = profile.email.split('@')[1] || '';
-  const domainOk = allowedDomain
-    ? profile.hd === allowedDomain || emailDomain === allowedDomain
-    : false;
-
-  // Find by Google subject first, then by email (links an existing local user).
-  let [user] = await db.select().from(users).where(eq(users.googleSub, profile.sub)).limit(1);
-  if (!user) {
-    [user] = await db.select().from(users).where(eq(users.email, profile.email)).limit(1);
+  // Sign-in never creates an account: it links only to one an administrator
+  // prepared (see googleSignInDecision for the rule).
+  const [bySubject] = await db.select().from(users).where(eq(users.googleSub, profile.sub)).limit(1);
+  const [byEmail] = bySubject
+    ? []
+    : await db.select().from(users).where(eq(users.email, profile.email)).limit(1);
+  const decision = googleSignInDecision(bySubject, byEmail, profile);
+  if (!decision.ok) {
+    console.warn(`Google sign-in refused: ${decision.reason}`);
+    return fail(GOOGLE_REFUSED);
   }
 
-  if (!user) {
-    if (!domainOk) {
-      return fail('No account for that email. Ask IT Operations for access.');
-    }
-    [user] = await db
-      .insert(users)
-      .values({
-        email: profile.email,
-        passwordHash: null,
-        googleSub: profile.sub,
-        avatar: profile.picture,
-        name: profile.name,
-        status: 'active',
-        lastLogin: new Date(),
-      })
-      .returning();
-  } else {
-    if (user.status !== 'active') {
-      return fail('This account is suspended. Contact an administrator.');
-    }
-    // Link the Google identity + refresh avatar/last-login on the existing user.
-    await db
-      .update(users)
-      .set({
-        googleSub: user.googleSub ?? profile.sub,
-        avatar: user.avatar ?? profile.picture,
-        lastLogin: new Date(),
-      })
-      .where(eq(users.id, user.id));
-  }
+  const account = (bySubject ?? byEmail)!;
+  // Record the subject on first sign-in, guarded so a concurrent link of the
+  // same account to another Google identity cannot both succeed.
+  const [signedIn] = await db
+    .update(users)
+    .set({
+      ...(decision.link ? { googleSub: profile.sub } : {}),
+      avatar: account.avatar ?? profile.picture,
+      lastLogin: new Date(),
+    })
+    .where(
+      and(
+        eq(users.id, decision.userId),
+        decision.link ? isNull(users.googleSub) : eq(users.googleSub, profile.sub)
+      )
+    )
+    .returning({ id: users.id });
+  if (!signedIn) return fail(GOOGLE_REFUSED);
 
-  const token = await signSession(user.id);
-  // Deliver the token in the URL fragment (never sent to servers / not logged).
-  return c.redirect(`${backTo}#token=${encodeURIComponent(token)}`);
+  try {
+    await issueSession(c, signedIn.id, 'google');
+  } catch {
+    // The account stopped being Active between the check and the session.
+    return fail(GOOGLE_REFUSED);
+  }
+  return c.redirect(`${backTo}#signed-in`);
 });
 
-// POST /api/auth/logout (stateless — client drops the token)
-authRoutes.post('/logout', (c) => c.json({ ok: true }));
+authRoutes.post('/logout', authMiddleware, async (c) => {
+  await db.update(sessions).set({ revokedAt: new Date(), revokedReason: 'logout' })
+    .where(eq(sessions.id, c.get('sessionId')));
+  clearSessionCookies(c);
+  return c.json({ ok: true });
+});
 
 // GET /api/auth/me — current user + accessible hotels with effective perms
 authRoutes.get('/me', authMiddleware, async (c) => {
@@ -246,7 +238,11 @@ authRoutes.post(
     if (!valid) return c.json({ error: 'Current password is incorrect' }, 400);
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ passwordHash }).where(eq(users.id, userId));
+      await revokeUserSessions(userId, 'password-change', tx);
+    });
+    clearSessionCookies(c);
     return c.json({ ok: true });
   }
 );

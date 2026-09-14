@@ -46,7 +46,8 @@ wizard:
 1. **Details** — pick the kind (workstation floor / CCTV floor), enter a name (the
    slug is derived automatically but editable), and a short label.
    **The kind is permanent.** Neither the UI nor `PATCH /api/floors` can change
-   it — `updateFloorSchema` does not accept the field. To correct a wrong one,
+   it — `updateFloorSchema` does not accept the field (a PATCH
+   carrying only `kind` is refused with `400`). To correct a wrong one,
    delete the floor and create it again with the same slug: the revive path
    replaces every field, kind included. While the floor has no devices yet this
    costs nothing.
@@ -75,7 +76,7 @@ Useful for scripting or bulk setup. Both calls require a token from a user with
 `floors:crud` on the target property.
 
 ```bash
-BASE=http://localhost:3001/api
+BASE=http://localhost:3000/api   # or http://localhost:5173/api through the Vite proxy
 TOKEN=$(curl -s -X POST $BASE/auth/login -H 'content-type: application/json' \
   -d '{"email":"chai@richmond.local","password":"admin123"}' | jq -r .token)
 
@@ -109,9 +110,6 @@ curl -X PATCH "$BASE/floors/lobby?hotelId=rh2"  -H "authorization: Bearer $TOKEN
 curl -X DELETE "$BASE/floors/lobby?hotelId=rh2" -H "authorization: Bearer $TOKEN"
 ```
 
-A runnable end-to-end example (create via API, then screenshot the UI) lives at
-`_smoke/add-floor.mjs`.
-
 ---
 
 ## 3. Via the seed (fixtures / demo data)
@@ -138,6 +136,12 @@ Click a button, then click the spot on the plan — the click is converted to
 position. The pin lands exactly where you clicked. Existing pins can be dragged to
 reposition via **Edit pins**.
 
+The API enforces the same split, whoever calls it: `POST` / `PATCH /api/devices`
+answer `400` when the `floorId` is not a live floor of that property, or when the
+kind doesn't fit — an `IP Camera` only on a CCTV floor, every other type only on a
+workstation floor. A drag (`x`/`y` only) is never re-checked.
+
+> Rule: `backend/src/lib/device-floor.ts` (`test/device-floor.test.ts`).
 > Front-end: place mode in `frontend/src/components/floor-map.tsx`; the dialog's
 > `placement` prop in `frontend/src/components/device-dialog.tsx`.
 
@@ -178,6 +182,3 @@ bun test
 The rule for what a floor will accept as a pin is a pure module,
 `frontend/src/lib/floor-placement.ts`, covered by `floor-placement.test.ts`
 (`cd frontend && bun test`).
-
-UI smoke tests (Playwright) live in `_smoke/` — `add-floor.mjs` exercises the full
-add-a-floor flow.

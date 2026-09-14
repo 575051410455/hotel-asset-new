@@ -15,6 +15,7 @@ import {
   useUpdateRole,
   useCreateGroup,
   useUpdateGroup,
+  useAttachUser,
   type AccessUser,
   type AccessRole,
   type AccessGroup,
@@ -48,7 +49,6 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
     phone: user?.phone ?? '',
     title: user?.title ?? '',
     department: user?.department ?? '',
-    password: '',
   });
   const [error, setError] = useState('');
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -66,7 +66,7 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
       );
     } else {
       create.mutate(
-        { ...common, email: f.email.trim(), password: f.password || 'changeme123' },
+        { ...common, email: f.email.trim() },
         { onSuccess: () => { toast.success('User created'); onClose(); }, onError: (e: Error) => setError(e.message) }
       );
     }
@@ -79,7 +79,6 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
     { key: 'title', label: 'Job title', ph: 'e.g. Accountant' },
     { key: 'department', label: 'Department', ph: 'e.g. Account' },
   ];
-  if (!isEdit) fields.push({ key: 'password', label: 'Temp password', ph: 'changeme123' });
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -94,6 +93,11 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
             </Field>
           ))}
         </div>
+        {!isEdit && (
+          <div className="mt-3 text-[11.5px] leading-[1.5] text-ink3">
+            No password is set. The person signs in with Google using this email address, then you assign their access.
+          </div>
+        )}
         {error && <div className={errorBox}>{error}</div>}
         <DialogFooter className="mt-[18px]">
           <Button variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
@@ -121,8 +125,17 @@ export function RoleDialog({
   const update = useUpdateRole();
   const [name, setName] = useState(role?.name ?? '');
   const [desc, setDesc] = useState(role?.description ?? '');
+  // Only the canonical keys: the server also returns the legacy `access` mirror,
+  // which would disagree with an edited User Management level and be refused.
   const [perms, setPerms] = useState<RolePerms>(
-    role?.perms ?? { devices: 'read', floors: 'read', cctv: 'read', access: 'none' }
+    role
+      ? {
+          devices: role.perms.devices,
+          floors: role.perms.floors,
+          cctv: role.perms.cctv,
+          userManagement: role.perms.userManagement,
+        }
+      : { devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' }
   );
   const [error, setError] = useState('');
   const pending = create.isPending || update.isPending;
@@ -293,6 +306,112 @@ export function GroupDialog({
         <DialogFooter className="mt-[18px]">
           <Button variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
           <Button onClick={submit} disabled={pending}>{isEdit ? 'Save changes' : 'Create group'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Add to a property by email ───────────────────────────────────────────────
+// Finds an existing account by exact email and gives it a role at one property,
+// without showing anyone the staff list of other properties. When no account
+// uses the email the server says so, and the dialog asks for a name to create
+// the person's Google-only account in the same step.
+export function AttachUserDialog({
+  open,
+  roles,
+  hotels,
+  onClose,
+}: {
+  open: boolean;
+  /** Only the roles this administrator may give. */
+  roles: AccessRole[];
+  /** Only the properties this administrator may change. */
+  hotels: AccessHotel[];
+  onClose: () => void;
+}) {
+  const attach = useAttachUser();
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [hotelId, setHotelId] = useState(() => hotels[0]?.id ?? '');
+  const [roleId, setRoleId] = useState(() => roles[0]?.id ?? '');
+  const [needsName, setNeedsName] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = () => {
+    setError('');
+    if (!/^[^@\s]+@[^@\s]+$/.test(email.trim())) return setError('Enter the person’s full email address.');
+    if (!hotelId) return setError('There is no property you can add people to.');
+    if (!roleId) return setError('There is no role you are allowed to give.');
+    if (needsName && !name.trim()) return setError('Enter their name to create the account.');
+    attach.mutate(
+      { email: email.trim(), hotelId, roleId, ...(needsName ? { name: name.trim() } : {}) },
+      {
+        onSuccess: () => {
+          toast.success(needsName ? 'Account created and added' : 'Added to the property');
+          onClose();
+        },
+        onError: (e: Error) => {
+          // The server's answer when no account uses the email: ask for a name and create it next time.
+          if (!needsName && e.message.startsWith('No account uses that email')) {
+            setNeedsName(true);
+            setError('No account uses that email yet. Enter their name to create one — they will sign in with Google.');
+            return;
+          }
+          setError(e.message);
+        },
+      }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle className="text-[15.5px]">Add to a property</DialogTitle>
+        </DialogHeader>
+        <div className="mt-3 flex flex-col gap-[11px]">
+          <Field label="Email">
+            <input
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setNeedsName(false);
+                setError('');
+              }}
+              placeholder="name@company.com"
+              className={inputCls}
+            />
+          </Field>
+          {needsName && (
+            <Field label="Full name">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Nok F." className={inputCls} />
+            </Field>
+          )}
+          <div className="grid grid-cols-2 gap-x-3">
+            <Field label="Property">
+              <select value={hotelId} onChange={(e) => setHotelId(e.target.value)} className={inputCls}>
+                {hotels.map((h) => (
+                  <option key={h.id} value={h.id}>{h.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Role">
+              <select value={roleId} onChange={(e) => setRoleId(e.target.value)} className={inputCls}>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="text-[11.5px] leading-[1.5] text-ink3">
+            Only roles you are allowed to give are listed. Their access at other properties is left as it is.
+          </div>
+        </div>
+        {error && <div className={errorBox}>{error}</div>}
+        <DialogFooter className="mt-[18px]">
+          <Button variant="outline" onClick={onClose} disabled={attach.isPending}>Cancel</Button>
+          <Button onClick={submit} disabled={attach.isPending}>{needsName ? 'Create and add' : 'Add'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -14,7 +14,7 @@ role-based access control, profiles, and printable asset stickers.
 ## Layout
 
 ```
-backend/    Bun + Hono API (port 3001) — auth, hotels, floors, devices, access, uploads
+backend/    Bun + Hono API (port 3000) — auth, hotels, floors, devices, access, uploads
 frontend/   React + Vite SPA (port 5174) — proxies /api and /uploads to the backend
 docs/        Project docs (see docs/add-a-floor.md)
 ```
@@ -26,11 +26,11 @@ docs/        Project docs (see docs/add-a-floor.md)
 ```bash
 cd backend
 bun install
-cp .env.example .env            # then fill in DATABASE_URL + JWT_SECRET
+cp .env.example .env            # then fill in DATABASE_URL + FRONTEND_URL
 bun run db:create               # create the database
-bun run db:push                 # push the schema
+bun run db:migrate              # apply the checked-in migrations (backend/drizzle)
 bun run db:seed                 # seed demo hotels, roles, users, floors, devices
-bun src/index.ts                # serve on :3001  (or: bun run dev)
+bun src/index.ts                # serve on :3000  (or: bun run dev)
 ```
 
 > `.env` is gitignored — it holds the database credentials and JWT secret. Use a

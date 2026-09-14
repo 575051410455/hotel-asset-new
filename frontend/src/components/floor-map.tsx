@@ -11,6 +11,8 @@ import {
   placementState,
   placementOptionsToRender,
   placementHint,
+  emptyFloorGuidance,
+  emptyFloorTitle,
   type PlacementTab,
 } from '@/lib/floor-placement';
 import { useDeleteDevice } from '@/lib/devices';
@@ -105,6 +107,10 @@ export function FloorMapView({
   const [placeOpen, setPlaceOpen] = useState(false);
   const placeTypeRef = useRef(placeType);
   placeTypeRef.current = placeType;
+  // Placing a device that already exists on this floor but has no position yet.
+  const [placeExisting, setPlaceExisting] = useState<Device | null>(null);
+  const placeExistingRef = useRef(placeExisting);
+  placeExistingRef.current = placeExisting;
 
   // What you can drop on this floor, and why you can't — decided in lib so the
   // rule is testable and cannot drift between screens.
@@ -198,21 +204,44 @@ export function FloorMapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editMode, floor?.id]);
 
-  // Convert a click on the canvas to %-coords on the plan, then open the
-  // pre-filled device dialog so the new pin lands exactly where you clicked.
-  const placeAt = useCallback((clientX: number, clientY: number) => {
+  // Convert a click on the canvas to %-coords on the plan.
+  const planPointAt = useCallback((clientX: number, clientY: number) => {
     const node = canvasRef.current;
-    if (!node) return;
+    const { cw } = sizeRef.current;
+    if (!node || !cw) return null;
     const rect = node.getBoundingClientRect();
     const v = viewRef.current;
-    const { cw } = sizeRef.current;
     const a = aspectRef.current;
-    if (!cw) return;
     const fx = Math.min(1, Math.max(0, (clientX - rect.left - v.x) / (cw * v.z)));
     const fy = Math.min(1, Math.max(0, (clientY - rect.top - v.y) / (cw * a * v.z)));
-    setPlacePos({ x: +(fx * 100).toFixed(1), y: +(fy * 100).toFixed(1) });
-    setPlaceOpen(true);
+    return { x: +(fx * 100).toFixed(1), y: +(fy * 100).toFixed(1) };
   }, []);
+
+  // Open the pre-filled device dialog so the new pin lands exactly where you clicked.
+  const placeAt = useCallback(
+    (clientX: number, clientY: number) => {
+      const point = planPointAt(clientX, clientY);
+      if (!point) return;
+      setPlacePos(point);
+      setPlaceOpen(true);
+    },
+    [planPointAt]
+  );
+
+  // Give the chosen unplaced device the clicked position.
+  const positionExistingAt = useCallback(
+    (clientX: number, clientY: number) => {
+      const device = placeExistingRef.current;
+      const point = planPointAt(clientX, clientY);
+      if (!device || !point) return;
+      setPlaceExisting(null);
+      movePin.mutate(
+        { id: device.id, name: device.computerName, ...point },
+        { onSuccess: () => toast.success(`${device.computerName} placed`) }
+      );
+    },
+    [planPointAt, movePin]
+  );
 
   // Esc cancels place mode; losing edit rights cancels it too.
   useEffect(() => {
@@ -223,10 +252,21 @@ export function FloorMapView({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [placeType]);
+  useEffect(() => {
+    if (!placeExisting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPlaceExisting(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [placeExisting]);
   // Switching to a floor that can't take pins (no plan yet) cancels place mode
   // too, so a stray click can't drop one after the buttons have gone disabled.
   useEffect(() => {
-    if (!canPlace) setPlaceType(null);
+    if (!canPlace) {
+      setPlaceType(null);
+      setPlaceExisting(null);
+    }
   }, [canPlace]);
 
   // Stamp the last-updated time and reset the countdown whenever a fetch settles.
@@ -260,6 +300,7 @@ export function FloorMapView({
   }, [countdown, fetching, isError, onRefresh]);
 
   const pins = floor?.pins ?? [];
+  const unplaced = floor?.unplaced ?? [];
   const byName = useMemo(() => {
     const m = new Map<string, Device>();
     pins.forEach((p) => m.set(p.computerName, p));
@@ -359,6 +400,7 @@ export function FloorMapView({
     userZoomed.current = false;
     setSelectedId(null);
     setDrawerOpen(false);
+    setPlaceExisting(null);
     measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [floor?.id]);
@@ -441,6 +483,8 @@ export function FloorMapView({
       if (p && !p.moved) {
         if (placeTypeRef.current) {
           placeAt(p.sx, p.sy); // a click in place mode drops a new pin here
+        } else if (placeExistingRef.current) {
+          positionExistingAt(p.sx, p.sy); // a click puts the chosen unplaced device here
         } else {
           setSelectedId(null);
           setDrawerOpen(false);
@@ -566,6 +610,7 @@ export function FloorMapView({
                   key={o.tab}
                   onClick={() => {
                     setEditMode(false);
+                    setPlaceExisting(null);
                     setPlaceType((t) => (t === o.tab ? null : o.tab));
                   }}
                   // Shown but disabled without a floor plan: a pin placed on
@@ -586,6 +631,7 @@ export function FloorMapView({
             <button
               onClick={() => {
                 setPlaceType(null);
+                setPlaceExisting(null);
                 setEditMode((v) => !v);
               }}
               title="Reposition pins on the floor plan"
@@ -676,7 +722,49 @@ export function FloorMapView({
                 })}
               </div>
             ))}
-            {ready && groups.length === 0 && (
+            {ready && unplaced.length > 0 && (
+              <div>
+                <div className="flex items-baseline gap-[6px] px-[14px] pb-[5px] pt-3">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink3">Not placed</span>
+                  <span className="text-[10.5px] font-semibold text-ink3/75">{unplaced.length}</span>
+                </div>
+                {unplaced.map((d) => {
+                  const on = placeExisting?.id === d.id;
+                  return (
+                    <div key={d.id} className="mx-2 mb-[2px] flex items-center gap-[9px] rounded-lg border border-dashed border-line px-[9px] py-[7px]">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-semibold text-ink">
+                          {isCam ? d.computerName : d.name || d.computerName}
+                        </span>
+                        <span className="block truncate font-mono text-[10.5px] text-ink3">
+                          {isCam ? d.model || '—' : d.computerName}
+                        </span>
+                      </span>
+                      {canEdit && (
+                        <button
+                          onClick={() => {
+                            setEditMode(false);
+                            setPlaceType(null);
+                            setPlaceExisting(on ? null : d);
+                          }}
+                          // Same rule as the Add buttons: a device needs a plan to sit on.
+                          disabled={!canPlace}
+                          title={canPlace ? `Click, then click the spot on the plan for ${d.computerName}` : placementHint(floor, canEdit, placeOptions[0])}
+                          className={cn(
+                            'flex h-[26px] flex-none items-center gap-[5px] rounded-[7px] border px-[9px] text-[11.5px] font-semibold disabled:cursor-not-allowed disabled:opacity-50',
+                            on ? 'border-brand bg-brand text-brand-foreground' : 'border-line bg-surface text-ink2 hover:text-ink'
+                          )}
+                        >
+                          <Crosshair size={12} />
+                          Place
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {ready && groups.length === 0 && unplaced.length === 0 && (
               <div className="px-4 py-7 text-center text-[12.5px] text-ink3">
                 Nothing to show — adjust the search or filter.
               </div>
@@ -693,7 +781,7 @@ export function FloorMapView({
             ref={canvasRef}
             onPointerDown={onCanvasDown}
             className="absolute inset-0 overflow-hidden"
-            style={{ cursor: placeType ? 'crosshair' : 'grab', touchAction: 'none' }}
+            style={{ cursor: placeType || placeExisting ? 'crosshair' : 'grab', touchAction: 'none' }}
           >
             <div
               style={{
@@ -750,7 +838,7 @@ export function FloorMapView({
                       ping={ping}
                       selected={sel}
                       editMode={editMode}
-                      interactive={!placeType}
+                      interactive={!placeType && !placeExisting}
                       showLabel={showLabel}
                       label={isCam ? p.computerName : p.name || p.computerName}
                       onEnter={() => setHoveredId(p.computerName)}
@@ -831,6 +919,15 @@ export function FloorMapView({
               <span className="whitespace-nowrap text-[11.5px] text-ink3">Esc to cancel</span>
             </div>
           )}
+          {placeExisting && (
+            <div className="absolute bottom-[14px] left-1/2 z-[35] flex -translate-x-1/2 items-center gap-[8px] rounded-xl border-[1.5px] border-brand bg-surface p-[8px_14px] shadow-[var(--shadow)]">
+              <Crosshair size={14} className="text-brand" />
+              <span className="whitespace-nowrap text-[12px] font-semibold text-ink">
+                Click on the map to place {placeExisting.computerName}
+              </span>
+              <span className="whitespace-nowrap text-[11.5px] text-ink3">Esc to cancel</span>
+            </div>
+          )}
 
           {/* Overlays */}
           {isLoading && (
@@ -850,17 +947,35 @@ export function FloorMapView({
               </button>
             </Overlay>
           )}
-          {isEmpty && (
-            <Overlay>
-              <div className="text-[13.5px] font-bold text-ink">No {isCam ? 'cameras' : 'devices'} on this floor</div>
-              {/* Two different situations that used to share one misleading
-                  message: the floor genuinely has no plan yet, or it has one
-                  and simply nothing placed. They need different next steps. */}
+          {/* Hidden while placing, and never blocks the canvas: an empty floor must
+              still take the click that places its first pin. */}
+          {isEmpty && !placeType && !placeExisting && (
+            <Overlay passThrough>
+              <div className="text-[13.5px] font-bold text-ink">{emptyFloorTitle(kind, unplaced.length)}</div>
+              {/* Driven by the same decision as the Add and Place buttons, so this
+                  can never point at a control the viewer doesn't have or a floor
+                  that doesn't exist. */}
               <div className="max-w-[280px] text-center text-[12px] text-ink3">
-                {floor && !floor.image
-                  ? 'Upload a floor plan for this floor, then place pins on it.'
-                  : `Use ${isCam ? 'Add camera' : 'Add workstation'} to place the first pin.`}
+                {emptyFloorGuidance(floor, canEdit, kind, unplaced.length)}
               </div>
+              {canPlace && unplaced.length > 0 && (
+                <div className="flex max-w-[300px] flex-wrap justify-center gap-[6px]">
+                  {unplaced.slice(0, 3).map((d) => (
+                    <button
+                      key={d.id}
+                      onClick={() => {
+                        setEditMode(false);
+                        setPlaceType(null);
+                        setPlaceExisting(d);
+                      }}
+                      className="flex h-[28px] items-center gap-[5px] rounded-[7px] bg-brand px-[10px] text-[11.5px] font-semibold text-brand-foreground"
+                    >
+                      <Crosshair size={12} />
+                      Place {d.computerName}
+                    </button>
+                  ))}
+                </div>
+              )}
             </Overlay>
           )}
         </div>
@@ -928,10 +1043,17 @@ function ZoomBtn({ title, onClick, children }: { title: string; onClick: () => v
   );
 }
 
-function Overlay({ children }: { children: React.ReactNode }) {
+// `passThrough` lets clicks around the card reach the map underneath — for a
+// notice (the empty floor), not for loading or error states that must block.
+function Overlay({ children, passThrough = false }: { children: React.ReactNode; passThrough?: boolean }) {
   return (
-    <div className="absolute inset-0 z-[38] flex items-center justify-center backdrop-blur-[2px]">
-      <div className="flex flex-col items-center gap-[10px] rounded-[14px] border border-line bg-surface p-[22px_30px] shadow-[var(--shadow)]">
+    <div
+      className={cn(
+        'absolute inset-0 z-[38] flex items-center justify-center',
+        passThrough ? 'pointer-events-none' : 'backdrop-blur-[2px]'
+      )}
+    >
+      <div className="pointer-events-auto flex flex-col items-center gap-[10px] rounded-[14px] border border-line bg-surface p-[22px_30px] shadow-[var(--shadow)]">
         {children}
       </div>
     </div>

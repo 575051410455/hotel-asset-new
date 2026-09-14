@@ -17,8 +17,9 @@ import postgres from 'postgres';
 import bcrypt from 'bcryptjs';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import app from '../src/app';
+import { cookiesFrom, sessionHeaders, origin } from './session-client';
 import { db } from '../src/db';
-import { floors, devices, users, assignments } from '../src/db/schema';
+import { floors, devices, users, assignments, roles } from '../src/db/schema';
 
 const SLUG_PREFIX = 'zz-test-';
 const DEV_PREFIX = 'ZZ-TEST-';
@@ -28,6 +29,40 @@ const TEST_HOTELS = ['rh2', 'rh3'];
 const ADMIN_EMAIL = `${USER_PREFIX}admin@example.invalid`;
 const VIEWER_EMAIL = `${USER_PREFIX}viewer@example.invalid`;
 const PASSWORD = 'zz-test-Pa55word!';
+
+function registerRegressionSuite() {
+describe('floor authorization regression fixture', () => {
+  test.skipIf(!reachable)('omitted kind excludes CCTV floors and pins for a custom floor-only role', async () => {
+    const roleId = 'zz-test-floor-only';
+    const actorEmail = `${USER_PREFIX}floor-only@example.invalid`;
+    const floorId = 'zz-test-private-cctv';
+    try {
+      await db.insert(roles).values({ id: roleId, name: 'Regression floor only',
+        perms: { devices: 'none', floors: 'read', cctv: 'none', access: 'none' } });
+      const [actor] = await db.insert(users).values({ email: actorEmail,
+        name: 'Regression actor', passwordHash: await bcrypt.hash(PASSWORD, 10) }).returning();
+      await db.insert(assignments).values({ userId: actor.id, hotelId: 'rh2', roleId });
+      await db.insert(floors).values({ id: floorId, hotelId: 'rh2', name: 'Private CCTV',
+        short: 'Private', kind: 'cctv', departments: [] });
+      await db.insert(devices).values({ hotelId: 'rh2', floorId,
+        computerName: 'ZZ-TEST-PRIVATE-CCTV', type: 'Camera', x: 10, y: 10, ip: '192.0.2.123' });
+      const headers = authed(await login(actorEmail, PASSWORD));
+      const omitted = await api('/api/floors?hotelId=rh2', { headers });
+      expect(omitted.status).toBe(200);
+      const body = await omitted.json();
+      expect(body.every((floor: { kind: string }) => floor.kind === 'workstation')).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('192.0.2.123');
+      expect((await api('/api/floors?hotelId=rh2&kind=cctv', { headers })).status).toBe(403);
+    } finally {
+      await db.delete(devices).where(eq(devices.computerName, 'ZZ-TEST-PRIVATE-CCTV'));
+      await db.delete(floors).where(and(eq(floors.hotelId, 'rh2'), eq(floors.id, floorId)));
+      await db.delete(users).where(eq(users.email, actorEmail));
+      await db.delete(roles).where(eq(roles.id, roleId));
+    }
+  });
+});
+
+}
 
 // Probe the DB once. If it can't be reached we skip rather than hang/fail.
 let reachable = false;
@@ -44,20 +79,20 @@ if (process.env.DATABASE_URL) {
 }
 
 const api = (path: string, init?: RequestInit) => app.fetch(new Request('http://localhost' + path, init));
+registerRegressionSuite();
 
 async function login(email: string, password: string): Promise<string> {
   const res = await api('/api/auth/login', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', origin },
     body: JSON.stringify({ email, password }),
   });
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
-  return data.token;
+  if (!res.ok) throw new Error(`login failed for ${email} (HTTP ${res.status})`);
+  return cookiesFrom(res);
 }
 
 const authed = (token: string, extra: Record<string, string> = {}) => ({
-  authorization: `Bearer ${token}`,
+  ...sessionHeaders(token),
   ...extra,
 });
 
@@ -236,13 +271,15 @@ suite('floors routes (integration)', () => {
     expect(create.status).toBe(201);
     expect((await create.json()).kind).toBe('workstation');
 
-    // PATCH cannot touch it: the field is not in the update schema, so sending
-    // it changes nothing rather than erroring.
-    await api(`/api/floors/${slug}?hotelId=rh2`, {
+    // PATCH cannot touch it: the field is not in the update schema, so a body
+    // carrying only `kind` has nothing to write and is refused with a 400
+    // (it used to reach the database empty and fail as a 500).
+    const patchKind = await api(`/api/floors/${slug}?hotelId=rh2`, {
       method: 'PATCH',
       headers: authed(admin, { 'content-type': 'application/json' }),
       body: JSON.stringify({ kind: 'cctv' }),
     });
+    expect(patchKind.status).toBe(400);
     const afterPatch = await (await api('/api/floors?hotelId=rh2', { headers: authed(admin) })).json();
     expect(afterPatch.find((f: { id: string }) => f.id === slug).kind).toBe('workstation');
 
@@ -345,5 +382,102 @@ suite('floors routes (integration)', () => {
     // Admin delete cleans the pin up.
     const adminDel = await api(`/api/devices/${pin.id}`, { method: 'DELETE', headers: authed(admin) });
     expect(adminDel.status).toBe(200);
+  });
+
+  // ── A device's floor must exist and match its kind ──────────────────────────
+  const postDevice = (body: Record<string, unknown>) =>
+    api('/api/devices', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ hotelId: 'rh2', status: 'active', x: 50, y: 50, ...body }),
+    });
+
+  test('placing a device on a floor that does not exist is a 400, not a 500', async () => {
+    const res = await postDevice({
+      floorId: `${SLUG_PREFIX}nowhere`,
+      computerName: `${DEV_PREFIX}GHOST`,
+      type: 'Desktop',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('a camera is refused on a workstation floor, and a workstation on a CCTV floor', async () => {
+    // `alpha` is a workstation floor (revived above); make a CCTV one alongside.
+    const cctv = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: `${SLUG_PREFIX}cams`, kind: 'cctv', short: 'ZZ Cams' })),
+    });
+    expect(cctv.status).toBe(201);
+
+    const camOnWs = await postDevice({
+      floorId: `${SLUG_PREFIX}alpha`,
+      computerName: `${DEV_PREFIX}CAM-WRONG`,
+      type: 'IP Camera',
+    });
+    expect(camOnWs.status).toBe(400);
+
+    const wsOnCctv = await postDevice({
+      floorId: `${SLUG_PREFIX}cams`,
+      computerName: `${DEV_PREFIX}WS-WRONG`,
+      type: 'Desktop',
+    });
+    expect(wsOnCctv.status).toBe(400);
+
+    // The matching placement still works, and so does dragging it.
+    const cam = await postDevice({
+      floorId: `${SLUG_PREFIX}cams`,
+      computerName: `${DEV_PREFIX}CAM-1`,
+      type: 'IP Camera',
+    });
+    expect(cam.status).toBe(201);
+    const camId = (await cam.json()).id as number;
+
+    const drag = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ x: 10, y: 90 }),
+    });
+    expect(drag.status).toBe(200);
+
+    // Moving it to a workstation floor, or retyping it in place, is refused.
+    const move = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ floorId: `${SLUG_PREFIX}alpha` }),
+    });
+    expect(move.status).toBe(400);
+
+    const retype = await api(`/api/devices/${camId}`, {
+      method: 'PATCH',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ type: 'Desktop' }),
+    });
+    expect(retype.status).toBe(400);
+
+    const [unchanged] = await db.select().from(devices).where(eq(devices.id, camId));
+    expect(unchanged.floorId).toBe(`${SLUG_PREFIX}cams`);
+    expect(unchanged.type).toBe('IP Camera');
+  });
+  test('a device assigned to a floor without a position is listed as unplaced, never as a pin', async () => {
+    const slug = `${SLUG_PREFIX}unplaced`;
+    const floor = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: slug, kind: 'cctv', short: 'ZZ Unplaced' })),
+    });
+    expect(floor.status).toBe(201);
+
+    const cam = await postDevice({ floorId: slug, computerName: `${DEV_PREFIX}CAM-UNPLACED`, type: 'IP Camera', x: null, y: null });
+    expect(cam.status).toBe(201);
+
+    const list = (await (await api('/api/floors?hotelId=rh2&kind=cctv', { headers: authed(admin) })).json()) as {
+      id: string;
+      pins: { computerName: string }[];
+      unplaced: { computerName: string }[];
+    }[];
+    const listed = list.find((f) => f.id === slug)!;
+    expect(listed.pins).toEqual([]);
+    expect(listed.unplaced.map((d) => d.computerName)).toEqual([`${DEV_PREFIX}CAM-UNPLACED`]);
   });
 });

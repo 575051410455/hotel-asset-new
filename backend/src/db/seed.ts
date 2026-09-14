@@ -12,6 +12,7 @@
 //
 // Run with: bun run db:seed
 import bcrypt from 'bcryptjs';
+import { sql } from 'drizzle-orm';
 import { db } from './index';
 import {
   hotels,
@@ -23,9 +24,9 @@ import {
   assignments,
   floors,
   devices,
-  type RolePerms,
   type NewDevice,
 } from './schema';
+import { withLegacyAccessKey } from '../lib/permissions';
 
 // The demo data/logic lives in the design handoff bundle under _extracted/.
 // It is gitignored (absent in production), so it is loaded dynamically inside
@@ -35,9 +36,9 @@ const HOME_HOTEL = 'rh2';
 
 // ── Ported role/group/user defaults (auth-config.js, not exported) ────────────
 const DEFAULT_ROLES = [
-  { id: 'admin', name: 'Administrator', builtin: true, description: 'Full control: devices, floor plans, cameras and access management.', perms: { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' } as RolePerms },
-  { id: 'manager', name: 'IT Manager', builtin: true, description: 'Manage devices and floor plans; view cameras and access settings.', perms: { devices: 'crud', floors: 'crud', cctv: 'read', access: 'read' } as RolePerms },
-  { id: 'viewer', name: 'Viewer', builtin: true, description: 'Read-only access to dashboards and floor maps.', perms: { devices: 'read', floors: 'read', cctv: 'read', access: 'none' } as RolePerms },
+  { id: 'admin', name: 'Administrator', builtin: true, description: 'Full control: devices, floor plans, cameras and access management.', perms: withLegacyAccessKey({ devices: 'crud', floors: 'crud', cctv: 'crud', userManagement: 'crud' }) },
+  { id: 'manager', name: 'IT Manager', builtin: true, description: 'Manage devices and floor plans; view cameras and access settings.', perms: withLegacyAccessKey({ devices: 'crud', floors: 'crud', cctv: 'read', userManagement: 'read' }) },
+  { id: 'viewer', name: 'Viewer', builtin: true, description: 'Read-only access to dashboards and floor maps.', perms: withLegacyAccessKey({ devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' }) },
 ];
 
 const DEFAULT_GROUPS = [
@@ -177,6 +178,22 @@ async function seed() {
     await db.insert(assignments).values(assignmentRows);
   }
   console.log(`  assignments: ${assignmentRows.length}`);
+
+  // Platform Administrators: whoever holds User Management CRUD, directly or
+  // through a group attached to a hotel — the same rule migration 0003 applies
+  // to an existing database. Without it a freshly seeded demo has nobody able to
+  // manage accounts.
+  await db.execute(sql`
+    update users set platform_admin = true where id in (
+      select a.user_id from assignments a join roles r on r.id = a.role_id
+      where r.perms->>'userManagement' = 'crud'
+      union
+      select gm.user_id from group_members gm
+      join groups g on g.id = gm.group_id
+      join group_hotels gh on gh.group_id = g.id
+      join roles r on r.id = g.role_id
+      where r.perms->>'userManagement' = 'crud'
+    )`);
 
   // Floors (under the home hotel)
   const floorRows = Object.values(FLOORS).map((f: any, i: number) => ({

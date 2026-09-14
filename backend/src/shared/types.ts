@@ -109,17 +109,42 @@ export const floorIdentSchema = z.object({
 });
 
 // ── Access control (users / roles / groups) ──────────────────────────────────
-export const rolePermsSchema = z.object({
-  devices: permLevelEnum,
-  floors: permLevelEnum,
-  cctv: permLevelEnum,
-  access: permLevelEnum,
-});
+// A role's permissions as submitted. `userManagement` replaces the legacy
+// `access` key; during the rename overlap either is accepted (a client on the
+// previous release still sends `access`), but not two different values.
+export const rolePermsSchema = z
+  .object({
+    devices: permLevelEnum,
+    floors: permLevelEnum,
+    cctv: permLevelEnum,
+    userManagement: permLevelEnum.optional(),
+    access: permLevelEnum.optional(),
+  })
+  .refine((p) => p.userManagement !== undefined || p.access !== undefined, {
+    message: 'The User Management permission is required',
+    path: ['userManagement'],
+  })
+  .refine((p) => p.userManagement === undefined || p.access === undefined || p.userManagement === p.access, {
+    message: 'userManagement and the legacy access permission disagree',
+    path: ['access'],
+  });
 
+// A prepared account signs in with Google: it is created without any password.
 export const createUserSchema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email(),
-  password: z.string().min(6, 'Temp password must be at least 6 characters'),
+  phone: z.string().max(32).nullish(),
+  title: z.string().max(120).nullish(),
+  department: z.string().max(80).nullish(),
+});
+
+// Give a person, found by exact email, a role at one hotel. A name is required
+// only to create their Google-only account when no account uses the email.
+export const attachUserSchema = z.object({
+  email: z.string().email(),
+  hotelId: z.string().min(1),
+  roleId: z.string().min(1),
+  name: z.string().min(1).max(120).optional(),
   phone: z.string().max(32).nullish(),
   title: z.string().max(120).nullish(),
   department: z.string().max(80).nullish(),

@@ -8,21 +8,33 @@ import { floorRoutes } from './routes/floors';
 import { deviceRoutes } from './routes/devices';
 import { accessRoutes } from './routes/access';
 import { uploadRoutes } from './routes/uploads';
+import { sessionOrigin } from './lib/auth-session';
 
 const app = new Hono();
 
 app.use('/*', logger());
 
-const frontendUrl = process.env.FRONTEND_URL!;
 app.use(
   '*',
   cors({
-    origin: [frontendUrl, 'http://localhost:5173', 'http://localhost:5174', 'http://127.0.0.1:5174'],
+    origin: sessionOrigin(),
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'X-CSRF-Token'],
     credentials: true,
   })
 );
+
+// A state-changing API request must come from the application's own origin.
+// Browsers always send Origin on these methods; a missing or foreign one is a
+// cross-site request (or a non-browser client) and is refused before any route
+// runs — including sign-in, so another site cannot log a visitor in or out.
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+app.use('/api/*', async (c, next) => {
+  if (UNSAFE_METHODS.has(c.req.method) && c.req.header('origin') !== sessionOrigin()) {
+    return c.json({ error: 'Invalid request origin' }, 403);
+  }
+  await next();
+});
 
 // Serve uploaded floor-plan images (backend/uploads/* → /uploads/*).
 app.use('/uploads/*', serveStatic({ root: './' }));

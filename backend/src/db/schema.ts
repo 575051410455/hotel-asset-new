@@ -1,6 +1,9 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   serial,
+  bigserial,
+  bigint,
   varchar,
   integer,
   text,
@@ -8,10 +11,13 @@ import {
   real,
   timestamp,
   jsonb,
+  uuid,
   pgEnum,
   primaryKey,
   foreignKey,
   unique,
+  index,
+  check,
 } from 'drizzle-orm/pg-core';
 
 // ── Enums ────────────────────────────────────────────────────────────────────
@@ -26,11 +32,22 @@ export const deviceStatusEnum = pgEnum('device_status', [
 
 // Permission level per resource, stored on a role.
 export type PermLevel = 'none' | 'read' | 'crud';
+// Canonical permissions a role grants. `userManagement` was persisted as
+// `access` before the rename — read roles through normalizeRolePerms
+// (src/lib/permissions.ts), never straight from the column.
 export type RolePerms = {
   devices: PermLevel;
   floors: PermLevel;
   cctv: PermLevel;
-  access: PermLevel;
+  userManagement: PermLevel;
+};
+// What roles.perms may hold while the rename overlaps: either key, or both.
+export type StoredRolePerms = {
+  devices?: PermLevel;
+  floors?: PermLevel;
+  cctv?: PermLevel;
+  userManagement?: PermLevel;
+  access?: PermLevel;
 };
 
 // ── Tables ───────────────────────────────────────────────────────────────────
@@ -49,10 +66,14 @@ export const roles = pgTable('roles', {
   name: varchar('name', { length: 80 }).notNull(),
   description: text('description').notNull().default(''),
   builtin: boolean('builtin').notNull().default(false),
-  perms: jsonb('perms').$type<RolePerms>().notNull(),
+  perms: jsonb('perms').$type<StoredRolePerms>().notNull(),
+  // Optimistic concurrency: a stale editor's write is refused, not applied.
+  version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Account lifecycle: Active, Suspended (reversible hold) or Archived (a former
+// account kept for audit history — replaces hard deletion).
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   email: varchar('email', { length: 255 }).unique().notNull(),
@@ -66,10 +87,18 @@ export const users = pgTable('users', {
   phone: varchar('phone', { length: 32 }),
   title: varchar('title', { length: 120 }),
   department: varchar('department', { length: 80 }),
-  status: varchar('status', { length: 16 }).notNull().default('active'), // active | suspended
+  status: varchar('status', { length: 16 }).notNull().default('active'), // active | suspended | archived
+  // Platform-wide User Management authority, separate from per-hotel roles.
+  platformAdmin: boolean('platform_admin').notNull().default(false),
+  // The only accounts allowed a local password; they authenticate with TOTP too.
+  breakGlass: boolean('break_glass').notNull().default(false),
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
+  version: integer('version').notNull().default(1),
   lastLogin: timestamp('last_login'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  check('users_status_check', sql`${t.status} in ('active', 'suspended', 'archived')`),
+]);
 
 export const groups = pgTable('groups', {
   id: serial('id').primaryKey(),
@@ -77,6 +106,7 @@ export const groups = pgTable('groups', {
   roleId: varchar('role_id', { length: 32 })
     .references(() => roles.id)
     .notNull(),
+  version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -198,6 +228,110 @@ export const devices = pgTable(
   ]
 );
 
+// ── Security foundation ──────────────────────────────────────────────────────
+// Storage for docs/specs/security-hardening-and-user-management.md. Nothing reads
+// these tables yet; the session, MFA and throttling behaviour lands in later
+// phases on top of them.
+
+// An opaque, revocable server-side session. The browser holds the random session
+// identifier in an HttpOnly cookie; only its SHA-256 digest is stored here, so a
+// database read cannot be replayed as a login. `id` is the internal reference
+// used by audit events and the session list — never the credential.
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
+    userId: integer('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    authMethod: varchar('auth_method', { length: 16 }).notNull(), // google | break_glass | password
+    csrfTokenHash: varchar('csrf_token_hash', { length: 64 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    // When the user last proved who they are — privileged actions need this recent.
+    authenticatedAt: timestamp('authenticated_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(), // absolute (12h) limit
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedReason: varchar('revoked_reason', { length: 32 }),
+    clientIp: varchar('client_ip', { length: 64 }),
+    userAgent: varchar('user_agent', { length: 512 }),
+  },
+  (t) => [
+    index('sessions_user_idx').on(t.userId),
+    check('sessions_auth_method_check', sql`${t.authMethod} in ('google', 'break_glass', 'password')`),
+  ]
+);
+
+// Append-only Security audit events, retained 180 days. A trigger in the
+// migration refuses UPDATE, TRUNCATE and ordinary DELETE; only the retention
+// purge may delete. Actor/target columns carry no foreign keys on purpose: an
+// event must outlive every row it mentions. Never store secrets in `metadata`.
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    eventType: varchar('event_type', { length: 64 }).notNull(),
+    outcome: varchar('outcome', { length: 16 }).notNull(),
+    actorUserId: integer('actor_user_id'),
+    actorSessionId: uuid('actor_session_id'),
+    targetType: varchar('target_type', { length: 32 }),
+    targetId: varchar('target_id', { length: 64 }),
+    hotelId: varchar('hotel_id', { length: 16 }),
+    clientIp: varchar('client_ip', { length: 64 }),
+    userAgent: varchar('user_agent', { length: 512 }),
+    correlationId: varchar('correlation_id', { length: 64 }),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    index('audit_events_occurred_idx').on(t.occurredAt),
+    index('audit_events_actor_idx').on(t.actorUserId),
+    check('audit_events_outcome_check', sql`${t.outcome} in ('success', 'failure', 'denied', 'throttled')`),
+  ]
+);
+
+// Shared, persistent throttling state (not process-local), one row per key and
+// fixed window — e.g. login attempts per normalised account and per client address.
+export const rateLimitBuckets = pgTable(
+  'rate_limit_buckets',
+  {
+    bucketKey: varchar('bucket_key', { length: 200 }).notNull(),
+    windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+    hits: integer('hits').notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.bucketKey, t.windowStart] }),
+    index('rate_limit_buckets_window_idx').on(t.windowStart),
+  ]
+);
+
+// TOTP for Break-glass administrators. The secret is stored only as ciphertext
+// under a separately configured key; `lastAcceptedStep` rejects code replay.
+export const breakGlassMfa = pgTable('break_glass_mfa', {
+  userId: integer('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  totpSecretCiphertext: text('totp_secret_ciphertext').notNull(),
+  totpEnrolledAt: timestamp('totp_enrolled_at', { withTimezone: true }).notNull().defaultNow(),
+  lastAcceptedStep: bigint('last_accepted_step', { mode: 'number' }),
+});
+
+// One-way hashed, single-use recovery codes, shown once at enrolment.
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    codeHash: varchar('code_hash', { length: 255 }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('recovery_codes_user_idx').on(t.userId)]
+);
+
 // ── Inferred row types ───────────────────────────────────────────────────────
 export type Hotel = typeof hotels.$inferSelect;
 export type Role = typeof roles.$inferSelect;
@@ -206,3 +340,5 @@ export type Group = typeof groups.$inferSelect;
 export type Floor = typeof floors.$inferSelect;
 export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
+export type SessionRow = typeof sessions.$inferSelect;
+export type AuditEvent = typeof auditEvents.$inferSelect;

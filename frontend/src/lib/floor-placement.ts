@@ -75,6 +75,69 @@ export function placementOptionsToRender(
   return floor?.kind === 'cctv' ? [CAMERA] : [WORKSTATION, ACCESS_POINT];
 }
 
+const deviceNoun = (kind: 'workstation' | 'cctv', n: number) =>
+  kind === 'cctv' ? (n === 1 ? 'camera' : 'cameras') : n === 1 ? 'device' : 'devices';
+
+/** The heading over a floor with no pins: "no cameras", or "no cameras placed" when some wait for a position. */
+export function emptyFloorTitle(kind: 'workstation' | 'cctv', unplacedCount = 0): string {
+  return unplacedCount > 0 ? `No ${deviceNoun(kind, 2)} placed on this floor` : `No ${deviceNoun(kind, 2)} on this floor`;
+}
+
+/**
+ * What to tell someone looking at a floor with no pins on it.
+ *
+ * Driven by the same decision as the Add and Place buttons, so the map can never
+ * instruct a viewer to press a control that is hidden from them, or point at a
+ * floor that doesn't exist. Floor absence is reported before capability, because
+ * "there are no floors" is the more useful fact even to someone who couldn't act
+ * on it. Devices already assigned to the floor but without a position come before
+ * "place the first pin": placing them is the likelier next step.
+ */
+export function emptyFloorGuidance(
+  floor: PlaceableFloor | null | undefined,
+  canEdit: boolean,
+  kind: 'workstation' | 'cctv',
+  unplacedCount = 0
+): string {
+  if (!floor) {
+    return canEdit
+      ? 'No floors yet for this property — create one to start placing pins.'
+      : 'No floors have been set up for this property yet.';
+  }
+
+  const state = placementState(floor, canEdit);
+
+  if (unplacedCount > 0) {
+    const noun = deviceNoun(kind, unplacedCount);
+    const verb = unplacedCount === 1 ? 'has' : 'have';
+    if (state.canPlace) {
+      return `${unplacedCount} ${noun} on this floor ${verb} no position yet — press Place, then click the spot on the plan.`;
+    }
+    if (state.reason === 'no-floor-plan') {
+      return `Upload a floor plan for this floor, then place the ${unplacedCount} ${noun} waiting for a position.`;
+    }
+    return `${unplacedCount} ${noun} on this floor ${verb} no position on the plan yet.`;
+  }
+
+  if (state.canPlace) {
+    const first = state.options[0];
+    return `Use ${first.label} to place the first pin.`;
+  }
+
+  switch (state.reason) {
+    case 'no-floor-plan':
+      return canEdit
+        ? 'Upload a floor plan for this floor, then place pins on it.'
+        : 'This floor has no floor plan yet.';
+    case 'no-capability':
+      return kind === 'cctv'
+        ? 'No cameras have been placed on this floor yet.'
+        : 'No devices have been placed on this floor yet.';
+    case 'no-floor':
+      return 'Select a floor first.';
+  }
+}
+
 /** Tooltip for a placement button, explaining a blocked one rather than staying silent. */
 export function placementHint(
   floor: PlaceableFloor | null | undefined,

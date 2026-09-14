@@ -6,9 +6,13 @@ export type { Device, Floor, HotelAccess };
 
 export type DeviceStatus = 'active' | 'paused' | 'nodata' | 'rec' | 'offline';
 export type PermLevel = 'none' | 'read' | 'crud';
-export type Resource = 'devices' | 'floors' | 'cctv' | 'access';
+export type Resource = 'devices' | 'floors' | 'cctv' | 'userManagement';
 
-export type FloorWithPins = Floor & { pins: Device[] };
+export type FloorWithPins = Floor & {
+  pins: Device[];
+  /** Devices assigned to this floor that have no position on the plan yet. */
+  unplaced?: Device[];
+};
 
 export type AuthUser = {
   id: number;
@@ -19,12 +23,13 @@ export type AuthUser = {
   title: string | null;
   department: string | null;
   status: string;
+  platformAdmin: boolean;
   lastLogin: string | null;
   createdAt: string | null;
 };
 
 export type MeResponse = { user: AuthUser; hotels: HotelAccess[] };
-export type LoginResponse = { token: string; user: AuthUser; hotels: HotelAccess[] };
+export type LoginResponse = { user: AuthUser; hotels: HotelAccess[] };
 
 // ── Status presentation ──────────────────────────────────────────────────────
 // Unified status → presentation map (ported verbatim from the Dashboard's

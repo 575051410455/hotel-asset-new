@@ -34,11 +34,12 @@ calls the API at a **relative `/api`** (same origin); there is no build-time API
   A user with **zero assignments authenticates but sees no properties** → the frontend
   shows a "No properties assigned" screen (`_layout.tsx`). This is by design.
 - **Authorization**: every data route uses `authMiddleware`; access-management routes
-  additionally call `gate(userId, 'crud')` which checks `maxPerm(ctx, 'access')`. So a
+  additionally call `gate(userId, 'crud')` which checks `maxPerm(ctx, 'userManagement')`. So a
   logged-in user with no permissions gets **403**, not data.
-- **`JWT_SECRET` must stay STABLE across deploys** — changing it logs everyone out.
-  Never run the backend without setting it (there's an insecure `'default-secret'`
-  fallback; prod compose forces it via `${JWT_SECRET:?}`).
+- **Sessions are server-side**: Postgres `sessions`, an HttpOnly `om-session` cookie and an
+  `om-csrf` token echoed in `X-CSRF-Token`. `FRONTEND_URL` must be the exact public https
+  origin — the only Origin allowed to change data, and what makes the cookies Secure; the
+  backend won't start without it.
 
 ### Google "Sign in with Google" (added 2026-07-21)
 

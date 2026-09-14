@@ -24,9 +24,9 @@ function getJwks() {
 export function googleConfig() {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  // Allowed email domain for auto-provisioning (e.g. "richmond.local"). Empty
-  // means "no domain restriction" — but see the callback: without a domain we
-  // do NOT auto-create accounts.
+  // Optional Google Workspace domain (e.g. "richmond.local"), sent to Google only
+  // as a hint to pre-select that domain on the consent screen. It grants nothing:
+  // sign-in never creates accounts (see googleSignInDecision).
   const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN?.trim().toLowerCase() || '';
   // The redirect URI must match one registered in the Google Cloud console.
   // Defaults to the public origin + /api/auth/google/callback (same origin as

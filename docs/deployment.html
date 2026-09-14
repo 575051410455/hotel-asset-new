@@ -398,7 +398,7 @@ _smoke
   <section id="s4">
     <h2><span class="stepnum">4</span> Dockerfiles</h2>
     <h3>Backend — Bun + Hono API</h3>
-    <p>A thin Bun image. <code class="inline">bun install</code> also pulls <span class="mono">drizzle-kit</span> so we can push the schema from inside the container later.</p>
+    <p>A thin Bun image. <code class="inline">bun install</code> also pulls <span class="mono">drizzle-kit</span>; the schema is applied from inside the container with <code class="inline">db:migrate</code>.</p>
     <div class="code-card"><div class="code-head"><span class="fn">backend/Dockerfile</span><span class="lang">dockerfile</span><span class="copy">Copy</span></div><pre>FROM oven/bun:1-alpine
 WORKDIR /app
 
@@ -545,7 +545,6 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://opsmonitor:${DB_PASSWORD}@db:5432/opsmonitor
-      JWT_SECRET:   ${JWT_SECRET}
       PORT:         <span class="s">"3000"</span>
       FRONTEND_URL: https://${DOMAIN}
     volumes:
@@ -583,14 +582,12 @@ networks:
     <div class="code-card"><div class="code-head"><span class="fn">create the real .env (never commit)</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre>cat &gt; .env &lt;&lt;EOF
 DOMAIN=ops.example.com
 DB_PASSWORD=$(openssl rand -base64 24 | tr -d /+=)
-JWT_SECRET=$(openssl rand -base64 48 | tr -d /+=)
 EOF
 chmod 600 .env
 cat .env   <span class="c"># note these down somewhere safe</span></pre></div>
     <div class="code-card"><div class="code-head"><span class="fn">.env.deploy.example — commit this template</span><span class="copy">Copy</span></div><pre>DOMAIN=ops.example.com
-DB_PASSWORD=change-me-strong
-JWT_SECRET=change-me-very-long-random</pre></div>
-    <div class="warn"><b>Rotating the JWT secret logs everyone out</b> (existing tokens become invalid). That's expected — set it once at first deploy and keep it stable.</div>
+DB_PASSWORD=change-me-strong</pre></div>
+    <div class="note"><b>Sessions live in Postgres.</b> A deploy doesn't sign anyone out; logout, suspension and a password change end a session immediately.</div>
   </section>
 
   <!-- STEP 7 -->
@@ -606,14 +603,15 @@ docker compose logs -f backend   <span class="c"># expect: "ops-monitor backend 
   <!-- STEP 8 -->
   <section id="s8">
     <h2><span class="stepnum">8</span> Create the schema &amp; seed data</h2>
-    <p class="lead">Postgres already created the empty <span class="mono">opsmonitor</span> database (via <code class="inline">POSTGRES_DB</code>). Now push the Drizzle schema and load the demo data — run these <b>once</b>, inside the backend container.</p>
-    <div class="code-card"><div class="code-head"><span class="fn">one-time DB init</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># create all tables from the Drizzle schema</span>
-docker compose exec backend bun run db:push
+    <p class="lead">Postgres already created the empty <span class="mono">opsmonitor</span> database (via <code class="inline">POSTGRES_DB</code>). Now apply the checked-in migrations and load the demo data — run these <b>once</b>, inside the backend container.</p>
+    <div class="code-card"><div class="code-head"><span class="fn">one-time DB init</span><span class="lang">bash</span><span class="copy">Copy</span></div><pre><span class="c"># create all tables from the checked-in migrations (backend/drizzle)</span>
+docker compose exec backend bun run db:migrate
 
 <span class="c"># seed hotels, roles, users, floors, devices (demo accounts)</span>
 docker compose exec backend bun run db:seed</pre></div>
-    <div class="warn"><b>Seeding is for first launch / demos only.</b> <code class="inline">db:seed</code> clears and repopulates the tables — never run it against a database that already holds real data. For real use, push the schema, then create your admin via the Access Control screen and skip the seed (or run it once, then change every demo password).</div>
-    <div class="note"><b>Schema changes later?</b> This project uses <code class="inline">drizzle-kit push</code> (declarative). After pulling new code, re-run <code class="inline">db:push</code>. For audited migrations instead, switch to <code class="inline">db:generate</code> + <code class="inline">db:migrate</code>.</div>
+    <div class="warn"><b>Seeding is for first launch / demos only.</b> <code class="inline">db:seed</code> clears and repopulates the tables — never run it against a database that already holds real data. For real use, run the migrations, then create your admin via the Access Control screen and skip the seed (or run it once, then change every demo password).</div>
+    <div class="note"><b>Schema changes later?</b> Schema changes ship as reviewed SQL migrations in <span class="mono">backend/drizzle</span> (created with <code class="inline">db:generate</code>). After pulling new code, run <code class="inline">db:migrate</code>. A database that was originally built with <code class="inline">db:push</code> is detected and baselined automatically on the first run; if its shape doesn't match a known migration, the runner stops without changing anything.</div>
+    <div class="warn"><b>Don't run <code class="inline">db:push</code> any more.</b> It rewrites the live schema without recording history, and a database pushed past the migrations can no longer be baselined safely.</div>
   </section>
 
   <!-- STEP 9 -->
@@ -684,8 +682,8 @@ docker compose build
 echo "→ restarting services"
 docker compose up -d
 
-echo "→ applying any schema changes"
-docker compose exec -T backend bun run db:push
+echo "→ applying any schema migrations"
+docker compose exec -T backend bun run db:migrate
 
 echo "✓ redeploy complete"
 docker compose ps</pre></div>
@@ -721,7 +719,7 @@ echo "✓ backup written to $OUT"</pre></div>
     <ul>
       <li>✅ Firewall (<code class="inline">ufw</code>) allows only <b>22, 80, 443</b> — Postgres &amp; the API are never published.</li>
       <li>✅ SSH key auth; disable password &amp; root login in <code class="inline">/etc/ssh/sshd_config</code> (<code class="inline">PasswordAuthentication no</code>, <code class="inline">PermitRootLogin no</code>).</li>
-      <li>✅ Strong, generated <code class="inline">DB_PASSWORD</code> and <code class="inline">JWT_SECRET</code> in <code class="inline">.env</code> (mode 600, never committed).</li>
+      <li>✅ Strong, generated <code class="inline">DB_PASSWORD</code> in <code class="inline">.env</code> (mode 600, never committed).</li>
       <li>✅ HTTPS enforced (HTTP → 301), modern TLS only, security headers set.</li>
       <li>✅ <code class="inline">client_max_body_size</code> caps uploads; the backend also validates type (PNG/JPG) &amp; the 10 MB limit.</li>
       <li>✅ Change/delete all seeded demo accounts after first login.</li>
@@ -741,7 +739,7 @@ echo "✓ backup written to $OUT"</pre></div>
       <tr><td>Refreshing a route → 404</td><td>SPA fallback missing. Ensure <code>try_files $uri /index.html;</code> in <code>location /</code>.</td></tr>
       <tr><td>Cert issuance fails</td><td>DNS A record not propagated, or port 80 blocked. <code>dig +short DOMAIN</code>; check <code>ufw</code>; ensure the HTTP server block serves <code>/.well-known/acme-challenge/</code>.</td></tr>
       <tr><td>413 Request Entity Too Large</td><td>Upload &gt; <code>client_max_body_size</code>. Raise it (≥ 12m) and <code>nginx -s reload</code>.</td></tr>
-      <tr><td>Everyone logged out after deploy</td><td><code>JWT_SECRET</code> changed. Keep it stable across deploys.</td></tr>
+      <tr><td>“Invalid request origin” (403) on sign-in</td><td><code>FRONTEND_URL</code> isn't the exact https origin in the address bar. Fix it and restart the backend.</td></tr>
       <tr><td>Uploaded images 404 after restart</td><td>The <code>uploads</code> volume isn't mounted at <code>/app/uploads</code>, or you recreated the volume. Check the compose <code>volumes:</code>.</td></tr>
     </table>
   </section>

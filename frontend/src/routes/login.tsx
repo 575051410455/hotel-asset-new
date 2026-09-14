@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, useNavigate, redirect } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, unwrap, TOKEN_KEY } from '@/lib/api';
+import { api, unwrap, hasSession } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import type { LoginResponse } from '@/lib/types';
 
 export const Route = createFileRoute('/login')({
-  beforeLoad: () => {
-    if (localStorage.getItem(TOKEN_KEY)) throw redirect({ to: '/dashboard' });
+  beforeLoad: async () => {
+    if (await hasSession()) throw redirect({ to: '/dashboard' });
   },
   component: LoginPage,
 });
@@ -34,17 +34,15 @@ function LoginPage() {
   });
 
   // Handle the return trip from the Google callback: the backend redirects to
-  // /login#token=… on success or /login#error=… on failure.
+  // /login#signed-in on success or /login#error=… on failure.
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (!hash) return;
     const params = new URLSearchParams(hash);
-    const token = params.get('token');
     const err = params.get('error');
     // Clear the fragment so a refresh doesn't re-trigger this.
     history.replaceState(null, '', window.location.pathname + window.location.search);
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
+    if (hash === 'signed-in') {
       navigate({ to: '/dashboard' });
     } else if (err) {
       setError(err);
@@ -55,7 +53,6 @@ function LoginPage() {
     mutationFn: (vars: { email: string; password: string }) =>
       api.auth.login.$post({ json: vars }).then(unwrap) as Promise<LoginResponse>,
     onSuccess: (data) => {
-      localStorage.setItem(TOKEN_KEY, data.token);
       queryClient.setQueryData(['me'], { user: data.user, hotels: data.hotels });
       navigate({ to: '/dashboard' });
     },

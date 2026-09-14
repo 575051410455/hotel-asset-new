@@ -2,9 +2,10 @@
 import { describe, expect, test } from 'bun:test';
 import { canAccess, maxPerm, type UserContext, type HotelAccess } from '../src/lib/session';
 import type { RolePerms } from '../src/db/schema';
+import { withLegacyAccessKey } from '../src/lib/permissions';
 
-const ADMIN: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', access: 'crud' };
-const VIEWER: RolePerms = { devices: 'read', floors: 'read', cctv: 'read', access: 'none' };
+const ADMIN: RolePerms = { devices: 'crud', floors: 'crud', cctv: 'crud', userManagement: 'crud' };
+const VIEWER: RolePerms = { devices: 'read', floors: 'read', cctv: 'read', userManagement: 'none' };
 
 function hotel(id: string, roleId: string, perms: RolePerms): HotelAccess {
   return {
@@ -15,7 +16,7 @@ function hotel(id: string, roleId: string, perms: RolePerms): HotelAccess {
     sortOrder: 0,
     roleId,
     roleName: roleId,
-    perms,
+    perms: withLegacyAccessKey(perms),
     sources: ['direct'],
   };
 }
@@ -56,13 +57,13 @@ describe('canAccess', () => {
 
 describe('maxPerm', () => {
   test('returns the strongest level held across all properties', () => {
-    expect(maxPerm(ctx, 'access')).toBe('crud'); // via admin@rh2
+    expect(maxPerm(ctx, 'userManagement')).toBe('crud'); // via admin@rh2
     expect(maxPerm(ctx, 'devices')).toBe('crud');
   });
 
   test('returns none when no property grants the resource', () => {
     const viewerOnly: UserContext = { access: {}, hotels: [hotel('rh3', 'viewer', VIEWER)] };
-    expect(maxPerm(viewerOnly, 'access')).toBe('none');
+    expect(maxPerm(viewerOnly, 'userManagement')).toBe('none');
     expect(maxPerm(viewerOnly, 'floors')).toBe('read');
   });
 
