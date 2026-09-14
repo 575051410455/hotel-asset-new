@@ -46,6 +46,9 @@ floorRoutes.get('/', authMiddleware, zValidator('query', listQuery), async (c) =
   const result = floorRows.map((f) => ({
     ...f,
     pins: pinRows.filter((p) => p.floorId === f.id && p.x !== null && p.y !== null),
+    // Assigned to this floor but with no position on the plan yet — e.g. added
+    // from the inventory list. Not pins, but the map offers to place them.
+    unplaced: pinRows.filter((p) => p.floorId === f.id && (p.x === null || p.y === null)),
   }));
 
   return c.json(result);

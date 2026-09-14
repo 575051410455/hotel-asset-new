@@ -5,6 +5,7 @@ import {
   placementOptionsToRender,
   placementHint,
   emptyFloorGuidance,
+  emptyFloorTitle,
   type PlaceableFloor,
 } from './floor-placement';
 
@@ -129,5 +130,43 @@ describe('placementHint', () => {
 
   test('no floor selected says so', () => {
     expect(placementHint(null, true, camera)).toContain('Select a floor');
+  });
+});
+
+describe('emptyFloorGuidance with devices waiting for a position', () => {
+  test('points at Place when the floor can take pins', () => {
+    expect(emptyFloorGuidance(cctv, true, 'cctv', 1)).toBe(
+      '1 camera on this floor has no position yet — press Place, then click the spot on the plan.'
+    );
+    expect(emptyFloorGuidance(workstation, true, 'workstation', 2)).toContain('2 devices on this floor have no position yet');
+  });
+
+  test('asks for the plan first when the floor has none', () => {
+    expect(emptyFloorGuidance(planless, true, 'cctv', 2)).toBe(
+      'Upload a floor plan for this floor, then place the 2 cameras waiting for a position.'
+    );
+  });
+
+  test('tells a viewer the fact without pointing at a control', () => {
+    const text = emptyFloorGuidance(cctv, false, 'cctv', 1);
+    expect(text).toBe('1 camera on this floor has no position on the plan yet.');
+    expect(text).not.toContain('press Place');
+  });
+
+  test('mentions Place exactly when a device could be placed', () => {
+    for (const floor of [cctv, workstation, planless]) {
+      for (const canEdit of [true, false]) {
+        const text = emptyFloorGuidance(floor, canEdit, 'cctv', 3);
+        expect(text.includes('press Place')).toBe(placementState(floor, canEdit).canPlace);
+      }
+    }
+  });
+});
+
+describe('emptyFloorTitle', () => {
+  test('says "placed" only when devices are waiting for a position', () => {
+    expect(emptyFloorTitle('cctv')).toBe('No cameras on this floor');
+    expect(emptyFloorTitle('cctv', 1)).toBe('No cameras placed on this floor');
+    expect(emptyFloorTitle('workstation', 0)).toBe('No devices on this floor');
   });
 });

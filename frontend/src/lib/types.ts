@@ -8,7 +8,11 @@ export type DeviceStatus = 'active' | 'paused' | 'nodata' | 'rec' | 'offline';
 export type PermLevel = 'none' | 'read' | 'crud';
 export type Resource = 'devices' | 'floors' | 'cctv' | 'userManagement';
 
-export type FloorWithPins = Floor & { pins: Device[] };
+export type FloorWithPins = Floor & {
+  pins: Device[];
+  /** Devices assigned to this floor that have no position on the plan yet. */
+  unplaced?: Device[];
+};
 
 export type AuthUser = {
   id: number;

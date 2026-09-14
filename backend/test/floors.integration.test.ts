@@ -459,4 +459,25 @@ suite('floors routes (integration)', () => {
     expect(unchanged.floorId).toBe(`${SLUG_PREFIX}cams`);
     expect(unchanged.type).toBe('IP Camera');
   });
+  test('a device assigned to a floor without a position is listed as unplaced, never as a pin', async () => {
+    const slug = `${SLUG_PREFIX}unplaced`;
+    const floor = await api('/api/floors', {
+      method: 'POST',
+      headers: authed(admin, { 'content-type': 'application/json' }),
+      body: JSON.stringify(mkFloor({ id: slug, kind: 'cctv', short: 'ZZ Unplaced' })),
+    });
+    expect(floor.status).toBe(201);
+
+    const cam = await postDevice({ floorId: slug, computerName: `${DEV_PREFIX}CAM-UNPLACED`, type: 'IP Camera', x: null, y: null });
+    expect(cam.status).toBe(201);
+
+    const list = (await (await api('/api/floors?hotelId=rh2&kind=cctv', { headers: authed(admin) })).json()) as {
+      id: string;
+      pins: { computerName: string }[];
+      unplaced: { computerName: string }[];
+    }[];
+    const listed = list.find((f) => f.id === slug)!;
+    expect(listed.pins).toEqual([]);
+    expect(listed.unplaced.map((d) => d.computerName)).toEqual([`${DEV_PREFIX}CAM-UNPLACED`]);
+  });
 });
