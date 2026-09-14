@@ -19,6 +19,7 @@ export type AuthUser = {
   title: string | null;
   department: string | null;
   status: string;
+  platformAdmin: boolean;
   lastLogin: string | null;
   createdAt: string | null;
 };

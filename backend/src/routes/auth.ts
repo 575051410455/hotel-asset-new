@@ -43,6 +43,8 @@ function publicUser(u: typeof users.$inferSelect) {
     title: u.title,
     department: u.department,
     status: u.status,
+    // Lets the page decide whether to offer User Management; the server still decides every request.
+    platformAdmin: u.platformAdmin,
     lastLogin: u.lastLogin,
     createdAt: u.createdAt,
   };

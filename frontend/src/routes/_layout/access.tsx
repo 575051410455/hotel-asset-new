@@ -15,6 +15,7 @@ import {
   useSetMemberships,
   useDeleteRole,
   useDeleteGroup,
+  useAccessScope,
   type AccessUser,
   type AccessRole,
   type AccessGroup,
@@ -34,7 +35,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
-import { UserDialog, RoleDialog, GroupDialog } from '@/components/access-dialogs';
+import { AttachUserDialog, UserDialog, RoleDialog, GroupDialog } from '@/components/access-dialogs';
 
 export const Route = createFileRoute('/_layout/access')({
   component: AccessPage,
@@ -63,7 +64,8 @@ type Confirm = { type: 'user' | 'role' | 'group'; id: number | string; label: st
 type Dialog =
   | { kind: 'user'; user: AccessUser | null }
   | { kind: 'role'; role: AccessRole | null }
-  | { kind: 'group'; group: AccessGroup | null };
+  | { kind: 'group'; group: AccessGroup | null }
+  | { kind: 'attach' };
 
 function fmtLogin(iso: string | null): string {
   if (!iso) return 'Never';
@@ -72,9 +74,18 @@ function fmtLogin(iso: string | null): string {
 }
 
 function AccessPage() {
-  const { hotels: myHotels } = useAuth();
-  const canManage = myHotels.some((h) => h.perms.userManagement === 'crud');
-  const canRead = myHotels.some((h) => h.perms.userManagement !== 'none');
+  // Every control on this page follows the server's scope for this administrator
+  // (GET /api/access/scope); the server still decides each request.
+  const scope = useAccessScope();
+  const isPlatform = !!scope.data?.platform;
+  const crudHotelIds = useMemo(() => new Set(scope.data?.crudHotelIds ?? []), [scope.data]);
+  const canManage = isPlatform || crudHotelIds.size > 0;
+  const canRead = isPlatform || (scope.data?.readHotelIds.length ?? 0) > 0;
+  const canManageGroup = (g: AccessGroup) =>
+    isPlatform || (g.hotelIds.length > 0 && g.hotelIds.every((h) => crudHotelIds.has(h)));
+  const assignableRoles = (keepRoleId?: string) =>
+    (roles.data ?? []).filter((r) => r.assignable || r.id === keepRoleId);
+  const manageableHotels = () => (hotels.data ?? []).filter((h) => isPlatform || crudHotelIds.has(h.id));
 
   const [tab, setTab] = useState<Tab>('users');
   const [search, setSearch] = useState('');
@@ -91,7 +102,9 @@ function AccessPage() {
   const deleteRole = useDeleteRole();
   const deleteGroup = useDeleteGroup();
 
-  const primaryLabel = tab === 'users' ? 'Add user' : tab === 'roles' ? 'Create role' : tab === 'groups' ? 'Create group' : '';
+  // Creating unassigned accounts and roles is a Platform Administrator's; groups follow the scope.
+  const primaryLabel =
+    tab === 'users' ? (isPlatform ? 'Add user' : '') : tab === 'roles' ? (isPlatform ? 'Create role' : '') : tab === 'groups' ? 'Create group' : '';
 
   useSetPageHeader(
     {
@@ -101,6 +114,8 @@ function AccessPage() {
     },
     [canManage, canRead]
   );
+
+  if (scope.isLoading) return null;
 
   if (!canRead) {
     return (
@@ -176,6 +191,12 @@ function AccessPage() {
           </div>
         )}
         <div className="flex-1" />
+        {canManage && tab === 'users' && (
+          <button onClick={() => setDialog({ kind: 'attach' })} className="flex h-[34px] items-center gap-[7px] rounded-lg border border-line bg-surface px-[14px] text-[12.5px] font-semibold text-ink">
+            <Plus size={12} strokeWidth={2.4} />
+            Add to a property by email
+          </button>
+        )}
         {canManage && primaryLabel && (
           <button onClick={openPrimary} className="flex h-[34px] items-center gap-[7px] rounded-lg bg-ink px-[14px] text-[12.5px] font-semibold text-bg">
             <Plus size={12} strokeWidth={2.4} />
@@ -196,7 +217,7 @@ function AccessPage() {
         <RolesTab
           roles={roles.data ?? []}
           search={search}
-          canManage={canManage}
+          canManage={isPlatform}
           onEdit={(role) => setDialog({ kind: 'role', role })}
           onDelete={(role) => setConfirm({ type: 'role', id: role.id, label: role.name })}
         />
@@ -206,7 +227,7 @@ function AccessPage() {
           groups={groups.data ?? []}
           users={users.data ?? []}
           search={search}
-          canManage={canManage}
+          canManage={canManageGroup}
           onEdit={(group) => setDialog({ kind: 'group', group })}
           onDelete={(group) => setConfirm({ type: 'group', id: group.id, label: group.name })}
         />
@@ -221,6 +242,8 @@ function AccessPage() {
           groups={groups.data ?? []}
           hotels={hotels.data ?? []}
           canManage={canManage}
+          isPlatform={isPlatform}
+          crudHotelIds={crudHotelIds}
           onClose={() => setDrawerUserId(null)}
           onEdit={(user) => setDialog({ kind: 'user', user })}
           onDelete={(user) => setConfirm({ type: 'user', id: user.id, label: user.name })}
@@ -231,6 +254,9 @@ function AccessPage() {
       {dialog?.kind === 'user' && (
         <UserDialog open user={dialog.user} onClose={() => setDialog(null)} />
       )}
+      {dialog?.kind === 'attach' && (
+        <AttachUserDialog open roles={assignableRoles()} hotels={manageableHotels()} onClose={() => setDialog(null)} />
+      )}
       {dialog?.kind === 'role' && (
         <RoleDialog open role={dialog.role} resources={RESOURCES} onClose={() => setDialog(null)} />
       )}
@@ -238,8 +264,8 @@ function AccessPage() {
         <GroupDialog
           open
           group={dialog.group}
-          roles={roles.data ?? []}
-          hotels={hotels.data ?? []}
+          roles={assignableRoles(dialog.group?.roleId)}
+          hotels={manageableHotels()}
           users={users.data ?? []}
           onClose={() => setDialog(null)}
         />
@@ -420,7 +446,7 @@ function GroupsTab({
   groups: AccessGroup[];
   users: AccessUser[];
   search: string;
-  canManage: boolean;
+  canManage: (g: AccessGroup) => boolean;
   onEdit: (g: AccessGroup) => void;
   onDelete: (g: AccessGroup) => void;
 }) {
@@ -452,7 +478,7 @@ function GroupsTab({
                   {g.memberIds.map((id) => userName.get(id)).filter(Boolean).join(', ') || 'No members'}
                 </td>
                 <td className="whitespace-nowrap border-b border-line2 px-3 py-[11px]">
-                  {canManage && (
+                  {canManage(g) && (
                     <div className="flex justify-end gap-[4px]">
                       <button onClick={() => onEdit(g)} title="Edit group" className="flex size-[28px] items-center justify-center rounded-[7px] text-ink3 hover:bg-surface2 hover:text-ink">
                         <Pencil size={13} />
@@ -513,6 +539,8 @@ function UserDrawer({
   groups,
   hotels,
   canManage,
+  isPlatform,
+  crudHotelIds,
   onClose,
   onEdit,
   onDelete,
@@ -522,6 +550,8 @@ function UserDrawer({
   groups: AccessGroup[];
   hotels: AccessHotel[];
   canManage: boolean;
+  isPlatform: boolean;
+  crudHotelIds: ReadonlySet<string>;
   onClose: () => void;
   onEdit: (u: AccessUser) => void;
   onDelete: (u: AccessUser) => void;
@@ -579,7 +609,7 @@ function UserDrawer({
             <span className="block text-[12px] text-ink2">{user.title || '—'} · {user.department || '—'}</span>
           </span>
           <div className="flex-1" />
-          {canManage && !isArchived && (
+          {isPlatform && !isArchived && (
             <button onClick={() => onEdit(user)} className="h-[30px] rounded-lg border border-line bg-surface px-[11px] text-[12px] font-semibold text-ink2 hover:text-ink">
               Edit
             </button>
@@ -614,14 +644,17 @@ function UserDrawer({
                   <span className="flex-1 text-[12.5px] font-semibold">{h.name}</span>
                   <select
                     value={direct?.roleId ?? ''}
-                    disabled={!canChangeAccess}
+                    disabled={!canChangeAccess || !(isPlatform || crudHotelIds.has(h.id))}
+                    title={canChangeAccess && !(isPlatform || crudHotelIds.has(h.id)) ? 'You can view this property but not change its access.' : undefined}
                     onChange={(e) => setDirectRole(h.id, e.target.value)}
                     className="h-7 rounded-[7px] border border-line bg-surface px-[7px] text-[11.5px] text-ink disabled:opacity-60"
                   >
                     <option value="">— No direct role</option>
-                    {roles.map((r) => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))}
+                    {roles
+                      .filter((r) => r.assignable || r.id === direct?.roleId)
+                      .map((r) => (
+                        <option key={r.id} value={r.id}>{r.name}</option>
+                      ))}
                   </select>
                 </div>
                 {viaGroups.length > 0 && (
@@ -638,15 +671,20 @@ function UserDrawer({
         <div className="flex flex-wrap gap-[6px]">
           {groups.map((g) => {
             const inGroup = user.groupIds.includes(g.id);
+            // Same rule as the server: a group this administrator manages, whose role they may give.
+            const groupChangeable =
+              canChangeAccess &&
+              (isPlatform || (g.hotelIds.length > 0 && g.hotelIds.every((h) => crudHotelIds.has(h)))) &&
+              (inGroup || !!roles.find((r) => r.id === g.roleId)?.assignable);
             return (
               <button
                 key={g.id}
-                onClick={() => canChangeAccess && toggleGroup(g.id)}
-                disabled={!canChangeAccess}
+                onClick={() => groupChangeable && toggleGroup(g.id)}
+                disabled={!groupChangeable}
                 className={cn(
                   'flex items-center gap-[6px] rounded-full border px-[11px] py-[5px] text-[11.5px] font-semibold',
                   inGroup ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface text-ink3',
-                  canChangeAccess ? 'cursor-pointer' : 'cursor-default'
+                  groupChangeable ? 'cursor-pointer' : 'cursor-default'
                 )}
               >
                 {g.name}
@@ -656,7 +694,7 @@ function UserDrawer({
           })}
         </div>
 
-        {canManage && (
+        {isPlatform && (
           <div className="mt-5 flex flex-col gap-2 border-t border-line pt-[14px]">
             {isArchived ? (
               <button

@@ -102,6 +102,7 @@ export function AppSidebar() {
     { label: 'Asset stickers', icon: QrCode, to: '/stickers', search: undefined, active: path === '/stickers' },
   ];
 
+  const { canSeeUserManagement } = useAuth();
   const adminItems: NavItem[] = [
     ...(can('floors', 'read')
       ? [
@@ -115,7 +116,9 @@ export function AppSidebar() {
         ]
       : []),
     { label: 'My profile', icon: User, to: '/profile', search: undefined, active: path === '/profile' },
-    { label: 'Access control', icon: ShieldCheck, to: '/access', search: undefined, active: path === '/access' },
+    ...(canSeeUserManagement
+      ? [{ label: 'Access control', icon: ShieldCheck, to: '/access', search: undefined, active: path === '/access' } as NavItem]
+      : []),
   ];
 
   return (

@@ -251,6 +251,88 @@ Still outstanding in phase 4:
   belong to.
 - Recent-authentication for sensitive actions, and audit events.
 
+## Sixth increment — rollout phase 4, part 2 (Hotel Administrator scoping)
+
+User Management authority is no longer "the strongest level held at any
+hotel". `backend/src/lib/user-management-scope.ts` defines two kinds of
+administrator, and every `/api/access` endpoint enforces the difference:
+
+- **Platform Administrator** (`users.platform_admin`): unscoped.
+- **Everyone else:** scoped to the hotels where they hold the User Management
+  permission — READ to see, CRUD to change.
+
+Anything outside the caller's view answers 404, so a response never confirms
+that it exists.
+
+- **What a Hotel Administrator sees:**
+  - Only people connected to their hotels, directly or through a group, and for
+    each person only those hotels' assignments and effective access.
+  - Only groups whose hotels all lie inside their view. A group reaching other
+    hotels still counts toward effective access but is not named.
+  - Only their own hotels.
+  - Every role, flagged `assignable` when they may give it, with usage counted
+    only within their view.
+  - `GET /api/access/scope` reports the caller's scope, so the page can derive
+    its controls from the same rule.
+- **Platform Administrators only:** creating an unassigned account, editing
+  profiles, suspending, archiving, restoring, and every role change.
+- **Adding people:** `POST /api/access/users/attach` gives a person, found by
+  exact email, a role at one hotel. When no account uses that email and a name
+  is supplied, it creates the Google-only account in the same step, so a Hotel
+  Administrator never creates an account they cannot then see. Archived accounts
+  and the caller's own account are refused.
+- **Changing access:**
+  - A Hotel Administrator changes assignments and group memberships only at the
+    hotels and groups they manage; everything else stays as it was.
+  - They cannot give a role that carries User Management CRUD, so only a
+    Platform Administrator can create another administrator. Rows that are
+    already in place are never refused.
+  - They can create, edit and delete groups lying wholly inside their CRUD
+    hotels, but only with roles they may give and with members already connected
+    to those hotels.
+- **Self-demotion through groups:** no administrator can change the role, the
+  hotels or their own membership of a group they belong to, or delete that
+  group. Renaming it is allowed. Consequence in the demo data: chai and ohm
+  cannot change the grant of IT Operations themselves; another administrator
+  must.
+- **Seeding:** `db:seed` marks Platform Administrators with the same rule as
+  migration 0003, so a freshly seeded demo has administrators.
+- **Frontend:**
+  - `/api/auth/me` includes `platformAdmin`, and the navigation offers User
+    Management only to people who hold that authority somewhere.
+  - The page reads `GET /scope`: profile, lifecycle and role controls appear
+    only for Platform Administrators.
+  - "Add to a property by email" opens the attach dialog.
+  - Group actions, and the drawer's per-property roles and group toggles, unlock
+    only where the caller may change them; role pickers list only assignable
+    roles.
+- **Verification:**
+  - Unit tests for the scope rules.
+  - Integration tests for an rh2 Hotel Administrator with staff at rh2, rh3 and
+    both:
+    - Visibility and redaction.
+    - The scope endpoint and role assignability.
+    - Refusal of every Platform-only action.
+    - Attach by email, including account creation.
+    - Preserving assignments at other hotels.
+    - 404 for people outside their hotels.
+    - Group scoping.
+    - The group self-demotion guard.
+  - Results: backend suite 134 pass, 1 skip, 0 fail; frontend 21/21; both
+    packages typecheck.
+  - The page was not exercised in a browser: the dev servers had been stopped
+    for low memory.
+
+Still outstanding in phase 4:
+
+- Break-glass administrators: CLI-only creation and recovery, password plus TOTP.
+- Renaming the route and API to `/user-management`, with a temporary
+  compatibility mount.
+- A control for granting or removing platform authority.
+- Self-demotion by editing the perms of a role you hold.
+- Optimistic concurrency: the `version` columns exist but are unused.
+- Recent-authentication for sensitive actions, and audit events.
+
 ## Remaining specification work
 
 Opaque PostgreSQL sessions, permanent revocation, cookie/CSRF migration, Google-only

@@ -12,6 +12,7 @@
 //
 // Run with: bun run db:seed
 import bcrypt from 'bcryptjs';
+import { sql } from 'drizzle-orm';
 import { db } from './index';
 import {
   hotels,
@@ -177,6 +178,22 @@ async function seed() {
     await db.insert(assignments).values(assignmentRows);
   }
   console.log(`  assignments: ${assignmentRows.length}`);
+
+  // Platform Administrators: whoever holds User Management CRUD, directly or
+  // through a group attached to a hotel — the same rule migration 0003 applies
+  // to an existing database. Without it a freshly seeded demo has nobody able to
+  // manage accounts.
+  await db.execute(sql`
+    update users set platform_admin = true where id in (
+      select a.user_id from assignments a join roles r on r.id = a.role_id
+      where r.perms->>'userManagement' = 'crud'
+      union
+      select gm.user_id from group_members gm
+      join groups g on g.id = gm.group_id
+      join group_hotels gh on gh.group_id = g.id
+      join roles r on r.id = g.role_id
+      where r.perms->>'userManagement' = 'crud'
+    )`);
 
   // Floors (under the home hotel)
   const floorRows = Object.values(FLOORS).map((f: any, i: number) => ({

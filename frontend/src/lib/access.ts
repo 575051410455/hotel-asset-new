@@ -24,6 +24,8 @@ export type AccessRole = {
   description: string;
   builtin: boolean;
   perms: RolePerms;
+  /** Whether the signed-in administrator may give this role to someone. */
+  assignable: boolean;
   usage: { direct: number; groups: number };
 };
 
@@ -105,3 +107,23 @@ export const useUpdateGroup = () =>
   );
 export const useDeleteGroup = () =>
   useAccessMutation((id: number) => api.access.groups[':id'].$delete({ param: uid(id) }).then(unwrap));
+
+// What the signed-in administrator may see and change. A Platform Administrator
+// is unscoped; anyone else is limited to the listed hotels.
+export type AccessScope = { platform: boolean; readHotelIds: string[]; crudHotelIds: string[] };
+
+export function useAccessScope() {
+  return useQuery<AccessScope>({ queryKey: ['access', 'scope'], queryFn: () => api.access.scope.$get().then(unwrap) });
+}
+
+export type AttachUserInput = {
+  email: string;
+  hotelId: string;
+  roleId: string;
+  /** Needed only to create the Google-only account when no account uses the email. */
+  name?: string;
+};
+
+// Give a person, found by exact email, a role at one hotel.
+export const useAttachUser = () =>
+  useAccessMutation((body: AttachUserInput) => api.access.users.attach.$post({ json: body }).then(unwrap));

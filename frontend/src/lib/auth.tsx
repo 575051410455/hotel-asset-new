@@ -23,6 +23,8 @@ type AuthContextValue = {
   /** Highest permission level the user has for a resource on the active hotel. */
   permFor: (resource: Resource) => PermLevel;
   can: (resource: Resource, level: 'read' | 'crud') => boolean;
+  /** Whether to offer User Management at all: a Platform Administrator, or the permission at any hotel. */
+  canSeeUserManagement: boolean;
   logout: () => void;
 };
 
@@ -75,6 +77,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [permFor]
   );
 
+  // Mirrors the server's User Management scope; the server still decides every request.
+  const canSeeUserManagement =
+    !!data?.user?.platformAdmin || hotels.some((h) => h.perms.userManagement !== 'none');
+
   const logout = useCallback(async () => {
     const response = await api.auth.logout.$post();
     if (!response.ok && response.status !== 401) throw new Error('Could not sign out. Please retry.');
@@ -92,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthed: !!data?.user,
     permFor,
     can,
+    canSeeUserManagement,
     logout,
   };
 

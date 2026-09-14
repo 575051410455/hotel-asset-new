@@ -138,6 +138,18 @@ export const createUserSchema = z.object({
   department: z.string().max(80).nullish(),
 });
 
+// Give a person, found by exact email, a role at one hotel. A name is required
+// only to create their Google-only account when no account uses the email.
+export const attachUserSchema = z.object({
+  email: z.string().email(),
+  hotelId: z.string().min(1),
+  roleId: z.string().min(1),
+  name: z.string().min(1).max(120).optional(),
+  phone: z.string().max(32).nullish(),
+  title: z.string().max(120).nullish(),
+  department: z.string().max(80).nullish(),
+});
+
 export const updateUserSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   email: z.string().email().optional(),
