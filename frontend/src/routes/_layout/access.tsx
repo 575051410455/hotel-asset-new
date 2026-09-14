@@ -8,7 +8,8 @@ import {
   useAccessRoles,
   useAccessGroups,
   useAccessHotels,
-  useDeleteUser,
+  useArchiveUser,
+  useRestoreUser,
   useUpdateUser,
   useSetAssignments,
   useSetMemberships,
@@ -54,6 +55,7 @@ const LEVEL_PILL: Record<string, { label: string; color: string; bg: string }> =
 const STATUS_PILL: Record<string, { label: string; color: string; bg: string }> = {
   active: { label: 'ACTIVE', color: 'var(--ok)', bg: 'var(--ok-soft)' },
   suspended: { label: 'SUSPENDED', color: 'var(--bad)', bg: 'var(--bad-soft)' },
+  archived: { label: 'ARCHIVED', color: 'var(--ink3)', bg: 'var(--surface2)' },
 };
 
 type Tab = 'users' | 'roles' | 'groups' | 'hotels';
@@ -85,7 +87,7 @@ function AccessPage() {
   const groups = useAccessGroups();
   const hotels = useAccessHotels();
 
-  const deleteUser = useDeleteUser();
+  const archiveUser = useArchiveUser();
   const deleteRole = useDeleteRole();
   const deleteGroup = useDeleteGroup();
 
@@ -131,7 +133,7 @@ function AccessPage() {
     if (!confirm) return;
     const onErr = (e: Error) => toast.error(e.message);
     if (confirm.type === 'user') {
-      deleteUser.mutate(confirm.id as number, { onError: onErr });
+      archiveUser.mutate(confirm.id as number, { onError: onErr });
       setDrawerUserId(null);
     } else if (confirm.type === 'role') deleteRole.mutate(confirm.id as string, { onError: onErr });
     else deleteGroup.mutate(confirm.id as number, { onError: onErr });
@@ -246,10 +248,10 @@ function AccessPage() {
       <AlertDialog open={!!confirm} onOpenChange={(v) => !v && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {confirm?.label}?</AlertDialogTitle>
+            <AlertDialogTitle>{confirm?.type === 'user' ? 'Archive' : 'Delete'} {confirm?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirm?.type === 'user'
-                ? 'The account is removed and taken out of all groups. This cannot be undone.'
+                ? 'The account can no longer sign in and its sessions end. It stays in the list, keeps its email reserved, and can be restored.'
                 : confirm?.type === 'group'
                   ? 'Members lose any access they received through this group.'
                   : 'The role is removed. It must have no remaining assignments.'}
@@ -258,7 +260,7 @@ function AccessPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={doConfirm} className="bg-bad text-white hover:bg-bad/90">
-              Delete
+              {confirm?.type === 'user' ? 'Archive' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -524,12 +526,26 @@ function UserDrawer({
   onEdit: (u: AccessUser) => void;
   onDelete: (u: AccessUser) => void;
 }) {
+  const { user: me } = useAuth();
   const setAssignments = useSetAssignments();
   const setMemberships = useSetMemberships();
   const updateUser = useUpdateUser();
+  const restoreUser = useRestoreUser();
 
   if (!user) return null;
   const pill = STATUS_PILL[user.status] ?? STATUS_PILL.active;
+  const isSelf = user.id === me?.id;
+  const isArchived = user.status === 'archived';
+  // The same rule the server applies: nobody changes their own access here, and
+  // an archived account holds none. The explanation below is derived from it.
+  const canChangeAccess = canManage && !isSelf && !isArchived;
+  const accessLockedReason = !canManage
+    ? null
+    : isSelf
+      ? 'This is your own account — another administrator must change its access.'
+      : isArchived
+        ? 'Restore this archived account before changing its access.'
+        : null;
 
   const setDirectRole = (hotelId: string, roleId: string) => {
     const next = user.assignments.filter((a) => a.hotelId !== hotelId);
@@ -563,7 +579,7 @@ function UserDrawer({
             <span className="block text-[12px] text-ink2">{user.title || '—'} · {user.department || '—'}</span>
           </span>
           <div className="flex-1" />
-          {canManage && (
+          {canManage && !isArchived && (
             <button onClick={() => onEdit(user)} className="h-[30px] rounded-lg border border-line bg-surface px-[11px] text-[12px] font-semibold text-ink2 hover:text-ink">
               Edit
             </button>
@@ -586,6 +602,7 @@ function UserDrawer({
         ))}
 
         <SectionLabel>Property access</SectionLabel>
+        {accessLockedReason && <div className="pb-2 text-[11.5px] leading-[1.5] text-ink3">{accessLockedReason}</div>}
         <div className="flex flex-col gap-2">
           {hotels.map((h) => {
             const direct = user.assignments.find((a) => a.hotelId === h.id);
@@ -597,7 +614,7 @@ function UserDrawer({
                   <span className="flex-1 text-[12.5px] font-semibold">{h.name}</span>
                   <select
                     value={direct?.roleId ?? ''}
-                    disabled={!canManage}
+                    disabled={!canChangeAccess}
                     onChange={(e) => setDirectRole(h.id, e.target.value)}
                     className="h-7 rounded-[7px] border border-line bg-surface px-[7px] text-[11.5px] text-ink disabled:opacity-60"
                   >
@@ -624,12 +641,12 @@ function UserDrawer({
             return (
               <button
                 key={g.id}
-                onClick={() => canManage && toggleGroup(g.id)}
-                disabled={!canManage}
+                onClick={() => canChangeAccess && toggleGroup(g.id)}
+                disabled={!canChangeAccess}
                 className={cn(
                   'flex items-center gap-[6px] rounded-full border px-[11px] py-[5px] text-[11.5px] font-semibold',
                   inGroup ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface text-ink3',
-                  canManage ? 'cursor-pointer' : 'cursor-default'
+                  canChangeAccess ? 'cursor-pointer' : 'cursor-default'
                 )}
               >
                 {g.name}
@@ -641,16 +658,30 @@ function UserDrawer({
 
         {canManage && (
           <div className="mt-5 flex flex-col gap-2 border-t border-line pt-[14px]">
-            <button
-              onClick={() => updateUser.mutate({ id: user.id, patch: { status: user.status === 'suspended' ? 'active' : 'suspended' } }, { onError: (e: Error) => toast.error(e.message) })}
-              className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold"
-              style={{ color: user.status === 'suspended' ? 'var(--ok)' : 'var(--warn)' }}
-            >
-              {user.status === 'suspended' ? 'Re-activate account' : 'Suspend account'}
-            </button>
-            <button onClick={() => onDelete(user)} className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold text-bad">
-              Delete user
-            </button>
+            {isArchived ? (
+              <button
+                onClick={() => restoreUser.mutate(user.id, { onSuccess: () => toast.success('Account restored'), onError: (e: Error) => toast.error(e.message) })}
+                className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold"
+                style={{ color: 'var(--ok)' }}
+              >
+                Restore account
+              </button>
+            ) : isSelf ? (
+              <div className="text-[11.5px] leading-[1.5] text-ink3">You can't suspend or archive your own account.</div>
+            ) : (
+              <>
+                <button
+                  onClick={() => updateUser.mutate({ id: user.id, patch: { status: user.status === 'suspended' ? 'active' : 'suspended' } }, { onError: (e: Error) => toast.error(e.message) })}
+                  className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold"
+                  style={{ color: user.status === 'suspended' ? 'var(--ok)' : 'var(--warn)' }}
+                >
+                  {user.status === 'suspended' ? 'Re-activate account' : 'Suspend account'}
+                </button>
+                <button onClick={() => onDelete(user)} className="h-[34px] rounded-[9px] border border-line bg-surface text-[12.5px] font-semibold text-bad">
+                  Archive user
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

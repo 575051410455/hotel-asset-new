@@ -72,8 +72,11 @@ export const useUpdateUser = () =>
   useAccessMutation(({ id, patch }: { id: number; patch: Record<string, unknown> }) =>
     api.access.users[':id'].$patch({ param: uid(id), json: patch }).then(unwrap)
   );
-export const useDeleteUser = () =>
+// Archives the account (the API never hard-deletes users).
+export const useArchiveUser = () =>
   useAccessMutation((id: number) => api.access.users[':id'].$delete({ param: uid(id) }).then(unwrap));
+export const useRestoreUser = () =>
+  useAccessMutation((id: number) => api.access.users[':id'].restore.$post({ param: uid(id) }).then(unwrap));
 export const useSetAssignments = () =>
   useAccessMutation(({ id, assignments }: { id: number; assignments: { hotelId: string; roleId: string }[] }) =>
     api.access.users[':id'].assignments.$put({ param: uid(id), json: { assignments } }).then(unwrap)

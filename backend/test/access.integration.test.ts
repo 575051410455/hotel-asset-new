@@ -285,4 +285,89 @@ suite('access-control mutations (integration)', () => {
     expect(hotels.find((h) => h.id === 'rh2')?.perms.userManagement).toBe('none');
     expect((await api('/api/access/users', { headers })).status).toBe(403);
   });
+  // ── Account lifecycle: Google-only creation, archive and restore, self guards ─
+  const patchUser = (id: number, body: unknown) =>
+    api(`/api/access/users/${id}`, { method: 'PATCH', headers: auth(), body: JSON.stringify(body) });
+  const passwordLogin = (email: string, password: string) =>
+    api('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ email, password }),
+    });
+
+  test('a new account is Google-only: no password is stored, even when one is sent', async () => {
+    const googleOnly = `${USER_PREFIX}google-only@example.invalid`;
+    const res = await api('/api/access/users', {
+      method: 'POST',
+      headers: auth(),
+      body: JSON.stringify({ name: 'ZZ Google Only', email: googleOnly, password: 'changeme123' }),
+    });
+    expect(res.status).toBe(201);
+    const [row] = await db.select().from(users).where(eq(users.email, googleOnly));
+    expect(row.passwordHash).toBeNull();
+    expect((await passwordLogin(googleOnly, 'changeme123')).status).toBe(401);
+  });
+
+  test('archiving replaces deletion: the account stays, its sessions end, and it cannot sign in until restored', async () => {
+    const memberCookie = await login(MEMBER_EMAIL, PASSWORD);
+    try {
+      expect((await api(`/api/access/users/${memberId}`, { method: 'DELETE', headers: auth() })).status).toBe(200);
+      const [archived] = await db.select().from(users).where(eq(users.id, memberId));
+      expect(archived.status).toBe('archived');
+      expect(archived.archivedAt).not.toBeNull();
+
+      expect((await api('/api/auth/me', { headers: sessionHeaders(memberCookie) })).status).toBe(401);
+      expect((await passwordLogin(MEMBER_EMAIL, PASSWORD)).status).toBe(403);
+
+      // The email stays reserved, and an archived account cannot be edited or given access.
+      const dupe = await api('/api/access/users', {
+        method: 'POST',
+        headers: auth(),
+        body: JSON.stringify({ name: 'Someone New', email: MEMBER_EMAIL }),
+      });
+      expect(dupe.status).toBe(409);
+      expect((await dupe.json()).error).toContain('Restore');
+      expect((await patchUser(memberId, { title: 'ZZ' })).status).toBe(409);
+      expect(
+        (await api(`/api/access/users/${memberId}/assignments`, {
+          method: 'PUT', headers: auth(), body: JSON.stringify({ assignments: [] }),
+        })).status
+      ).toBe(409);
+
+      const restored = await api(`/api/access/users/${memberId}/restore`, { method: 'POST', headers: auth() });
+      expect(restored.status).toBe(200);
+      expect((await restored.json()).status).toBe('active');
+      // Restoring does not revive the old session, but a fresh sign-in works.
+      expect((await api('/api/auth/me', { headers: sessionHeaders(memberCookie) })).status).toBe(401);
+      expect((await api('/api/auth/me', { headers: sessionHeaders(await login(MEMBER_EMAIL, PASSWORD)) })).status).toBe(200);
+
+      expect((await api(`/api/access/users/${memberId}/restore`, { method: 'POST', headers: auth() })).status).toBe(409);
+    } finally {
+      await db.update(users).set({ status: 'active', archivedAt: null }).where(eq(users.id, memberId));
+    }
+  });
+
+  test('archiving or restoring an account that does not exist is a 404', async () => {
+    expect((await api(`/api/access/users/${GHOST_USER}`, { method: 'DELETE', headers: auth() })).status).toBe(404);
+    expect((await api(`/api/access/users/${GHOST_USER}/restore`, { method: 'POST', headers: auth() })).status).toBe(404);
+  });
+
+  test('an administrator cannot suspend, archive or change the access of their own account', async () => {
+    expect((await patchUser(adminId, { status: 'suspended' })).status).toBe(400);
+    expect((await api(`/api/access/users/${adminId}`, { method: 'DELETE', headers: auth() })).status).toBe(400);
+    expect(
+      (await api(`/api/access/users/${adminId}/assignments`, {
+        method: 'PUT', headers: auth(), body: JSON.stringify({ assignments: [] }),
+      })).status
+    ).toBe(400);
+    expect(
+      (await api(`/api/access/users/${adminId}/groups`, {
+        method: 'PUT', headers: auth(), body: JSON.stringify({ groupIds: [] }),
+      })).status
+    ).toBe(400);
+
+    const [self] = await db.select().from(users).where(eq(users.id, adminId));
+    expect(self.status).toBe('active');
+    expect((await db.select().from(assignments).where(eq(assignments.userId, adminId))).length).toBeGreaterThan(0);
+  });
 });

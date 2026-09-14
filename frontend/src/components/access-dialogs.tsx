@@ -48,7 +48,6 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
     phone: user?.phone ?? '',
     title: user?.title ?? '',
     department: user?.department ?? '',
-    password: '',
   });
   const [error, setError] = useState('');
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -66,7 +65,7 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
       );
     } else {
       create.mutate(
-        { ...common, email: f.email.trim(), password: f.password || 'changeme123' },
+        { ...common, email: f.email.trim() },
         { onSuccess: () => { toast.success('User created'); onClose(); }, onError: (e: Error) => setError(e.message) }
       );
     }
@@ -79,7 +78,6 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
     { key: 'title', label: 'Job title', ph: 'e.g. Accountant' },
     { key: 'department', label: 'Department', ph: 'e.g. Account' },
   ];
-  if (!isEdit) fields.push({ key: 'password', label: 'Temp password', ph: 'changeme123' });
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -94,6 +92,11 @@ export function UserDialog({ open, user, onClose }: { open: boolean; user: Acces
             </Field>
           ))}
         </div>
+        {!isEdit && (
+          <div className="mt-3 text-[11.5px] leading-[1.5] text-ink3">
+            No password is set. The person signs in with Google using this email address, then you assign their access.
+          </div>
+        )}
         {error && <div className={errorBox}>{error}</div>}
         <DialogFooter className="mt-[18px]">
           <Button variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>

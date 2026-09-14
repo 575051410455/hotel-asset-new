@@ -1,7 +1,6 @@
-import { Hono } from 'hono';
-import { eq, inArray } from 'drizzle-orm';
+import { Hono, type Context } from 'hono';
+import { and, eq, inArray } from 'drizzle-orm';
 import { zValidator } from '@hono/zod-validator';
-import bcrypt from 'bcryptjs';
 import { db } from '../db';
 import {
   users,
@@ -27,6 +26,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth';
 import { buildUserContext, maxPerm } from '../lib/session';
 import { computeEffectiveAccess } from '../lib/rbac';
 import { revokeUserSessions } from '../lib/auth-session';
+import { assertPlatformAdminRemains, lockAccountLifecycle, LifecycleRefusal } from '../lib/account-lifecycle';
 import { normalizeRolePerms, withLegacyAccessKey } from '../lib/permissions';
 
 export const accessRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -216,21 +216,38 @@ accessRoutes.get('/hotels', authMiddleware, async (c) => {
 });
 
 // ── User mutations ────────────────────────────────────────────────────────────
+// Accounts are prepared by an administrator and sign in with Google, so none is
+// created with a password. Archiving replaces deletion: the account keeps its
+// identity for audit history and its email stays reserved. Nobody can suspend
+// or archive their own account here, and the last active Platform Administrator
+// cannot be suspended or archived at all.
+
+// Answer a refused lifecycle change with its status; anything else is a real error.
+function refusal(c: Context, err: unknown) {
+  if (err instanceof LifecycleRefusal) return c.json({ error: err.message }, err.status);
+  throw err;
+}
+
 accessRoutes.post('/users', authMiddleware, zValidator('json', createUserSchema), async (c) => {
   const { ok } = await gate(Number(c.get('userId')), 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const body = c.req.valid('json');
 
-  const email = body.email.toLowerCase();
-  const [dupe] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
-  if (dupe) return c.json({ error: 'Another user already has that email.' }, 409);
+  const email = body.email.trim().toLowerCase();
+  const [dupe] = await db.select({ status: users.status }).from(users).where(eq(users.email, email)).limit(1);
+  if (dupe) {
+    const error =
+      dupe.status === 'archived'
+        ? 'An archived account already uses that email. Restore it instead of creating a new one.'
+        : 'Another user already has that email.';
+    return c.json({ error }, 409);
+  }
 
-  const passwordHash = await bcrypt.hash(body.password, 10);
   const [created] = await db
     .insert(users)
     .values({
       email,
-      passwordHash,
+      passwordHash: null,
       name: body.name,
       phone: body.phone ?? null,
       title: body.title ?? null,
@@ -242,33 +259,88 @@ accessRoutes.post('/users', authMiddleware, zValidator('json', createUserSchema)
 });
 
 accessRoutes.patch('/users/:id', authMiddleware, zValidator('json', updateUserSchema), async (c) => {
-  const { ok } = await gate(Number(c.get('userId')), 'crud');
+  const callerId = Number(c.get('userId'));
+  const { ok } = await gate(callerId, 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const id = Number(c.req.param('id'));
   const patch = c.req.valid('json');
   if (patch.email) {
-    const email = patch.email.toLowerCase();
+    const email = patch.email.trim().toLowerCase();
     const [dupe] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
     if (dupe && dupe.id !== id) return c.json({ error: 'Another user already has that email.' }, 409);
     patch.email = email;
   }
-  const [updated] = await db.transaction(async (tx) => {
-    const rows = await tx.update(users).set(patch).where(eq(users.id, id)).returning();
-    if (patch.status && patch.status !== 'active') await revokeUserSessions(id, 'account-status', tx);
-    return rows;
-  });
-  if (!updated) return c.json({ error: 'User not found' }, 404);
-  return c.json(publicUser(updated));
+  if (id === callerId && patch.status && patch.status !== 'active') {
+    return c.json({ error: 'You cannot suspend your own account.' }, 400);
+  }
+
+  try {
+    const updated = await db.transaction(async (tx) => {
+      await lockAccountLifecycle(tx);
+      const [current] = await tx.select({ status: users.status }).from(users).where(eq(users.id, id)).limit(1);
+      if (!current) return null;
+      if (current.status === 'archived') {
+        throw new LifecycleRefusal('This account is archived. Restore it before editing it.', 409);
+      }
+      if (patch.status && patch.status !== 'active') await assertPlatformAdminRemains(tx, id);
+      const [row] = await tx.update(users).set(patch).where(eq(users.id, id)).returning();
+      // Suspension ends every session at once; reactivating later does not revive them.
+      if (patch.status && patch.status !== 'active') await revokeUserSessions(id, 'account-status', tx);
+      return row;
+    });
+    if (!updated) return c.json({ error: 'User not found' }, 404);
+    return c.json(publicUser(updated));
+  } catch (err) {
+    return refusal(c, err);
+  }
 });
 
+// DELETE /api/access/users/:id — archive the account; accounts are never hard-deleted.
 accessRoutes.delete('/users/:id', authMiddleware, async (c) => {
   const callerId = Number(c.get('userId'));
   const { ok } = await gate(callerId, 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const id = Number(c.req.param('id'));
-  if (id === callerId) return c.json({ error: 'You cannot delete your own account.' }, 400);
-  await db.delete(users).where(eq(users.id, id));
-  return c.json({ ok: true });
+  if (!Number.isInteger(id)) return c.json({ error: 'Invalid id' }, 400);
+  if (id === callerId) return c.json({ error: 'You cannot archive your own account.' }, 400);
+
+  try {
+    const found = await db.transaction(async (tx) => {
+      await lockAccountLifecycle(tx);
+      const [current] = await tx.select({ status: users.status }).from(users).where(eq(users.id, id)).limit(1);
+      if (!current) return false;
+      if (current.status === 'archived') return true;
+      await assertPlatformAdminRemains(tx, id);
+      await tx.update(users).set({ status: 'archived', archivedAt: new Date() }).where(eq(users.id, id));
+      await revokeUserSessions(id, 'account-archived', tx);
+      return true;
+    });
+    if (!found) return c.json({ error: 'User not found' }, 404);
+    return c.json({ ok: true, archived: true });
+  } catch (err) {
+    return refusal(c, err);
+  }
+});
+
+// POST /api/access/users/:id/restore — make an archived account Active again. Its
+// old sessions stay revoked; the person signs in afresh.
+accessRoutes.post('/users/:id/restore', authMiddleware, async (c) => {
+  const { ok } = await gate(Number(c.get('userId')), 'crud');
+  if (!ok) return c.json({ error: 'Forbidden' }, 403);
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.json({ error: 'Invalid id' }, 400);
+
+  const [restored] = await db
+    .update(users)
+    .set({ status: 'active', archivedAt: null })
+    .where(and(eq(users.id, id), eq(users.status, 'archived')))
+    .returning();
+  if (restored) return c.json(publicUser(restored));
+
+  const [exists] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  return exists
+    ? c.json({ error: 'Only an archived account can be restored.' }, 409)
+    : c.json({ error: 'User not found' }, 404);
 });
 
 accessRoutes.post('/users/:id/reset-password', authMiddleware, zValidator('json', resetPasswordSchema), async (c) => {
@@ -281,11 +353,16 @@ accessRoutes.post('/users/:id/reset-password', authMiddleware, zValidator('json'
 
 // Replace a user's direct (non-group) property assignments.
 accessRoutes.put('/users/:id/assignments', authMiddleware, zValidator('json', assignmentsSchema), async (c) => {
-  const { ok } = await gate(Number(c.get('userId')), 'crud');
+  const callerId = Number(c.get('userId'));
+  const { ok } = await gate(callerId, 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const id = Number(c.req.param('id'));
-  const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  if (id === callerId) return c.json({ error: 'You cannot change your own access through User Management.' }, 400);
+  const [target] = await db.select({ status: users.status }).from(users).where(eq(users.id, id)).limit(1);
   if (!target) return c.json({ error: 'User not found' }, 404);
+  if (target.status === 'archived') {
+    return c.json({ error: 'This account is archived. Restore it before changing its access.' }, 409);
+  }
   const { assignments: rows } = c.req.valid('json');
 
   const problems = await missingRefs({
@@ -308,11 +385,16 @@ accessRoutes.put('/users/:id/assignments', authMiddleware, zValidator('json', as
 
 // Replace a user's group memberships.
 accessRoutes.put('/users/:id/groups', authMiddleware, zValidator('json', membershipSchema), async (c) => {
-  const { ok } = await gate(Number(c.get('userId')), 'crud');
+  const callerId = Number(c.get('userId'));
+  const { ok } = await gate(callerId, 'crud');
   if (!ok) return c.json({ error: 'Forbidden' }, 403);
   const id = Number(c.req.param('id'));
-  const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  if (id === callerId) return c.json({ error: 'You cannot change your own access through User Management.' }, 400);
+  const [target] = await db.select({ status: users.status }).from(users).where(eq(users.id, id)).limit(1);
   if (!target) return c.json({ error: 'User not found' }, 404);
+  if (target.status === 'archived') {
+    return c.json({ error: 'This account is archived. Restore it before changing its access.' }, 409);
+  }
   const { groupIds } = c.req.valid('json');
 
   const problems = await missingRefs({ groupIds });

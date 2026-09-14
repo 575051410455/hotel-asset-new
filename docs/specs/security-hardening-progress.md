@@ -187,6 +187,70 @@ Still outstanding from the session part of the spec:
 - Google sign-in still auto-provisions accounts on the allowed domain; that is
   removed with pre-provisioning in phase 4.
 
+## Fifth increment — rollout phase 4, part 1 (identity and account lifecycle)
+
+- **Google sign-in never creates an account.** `googleSignInDecision`
+  (`backend/src/lib/google-identity.ts`) decides which account a verified
+  Google identity may use:
+  - An account already linked to that Google subject signs in if it is Active,
+    even after its email changed.
+  - Otherwise the Active account with the matching email is linked on first
+    sign-in.
+  - A different Google account using an already-linked email is refused, and so
+    are unknown, suspended and archived accounts.
+  - Every refusal shows the same message. The link is written with a guard, so
+    two concurrent links of one account cannot both succeed.
+  - `GOOGLE_ALLOWED_DOMAIN` is now only a hint that pre-selects a domain on
+    Google's sign-in screen.
+  - **Deploy note:** staff who relied on domain auto-provisioning can no longer
+    sign in until an administrator creates their account.
+- **New accounts are Google-only.** User creation takes no password and stores
+  none, even when one is submitted.
+- **Archive replaces hard deletion.**
+  - `DELETE /api/access/users/:id` sets the account to Archived and revokes
+    every session.
+  - The email stays reserved; creating a new account with it is refused with a
+    hint to restore instead.
+  - An archived account cannot be edited or given access.
+  - `POST /api/access/users/:id/restore` makes it Active again. Its old sessions
+    stay revoked.
+- **Self-management guards:** an administrator cannot suspend or archive their
+  own account, or change their own assignments or group memberships, through
+  User Management.
+- **Last active Platform Administrator:** suspension and archiving run in a
+  transaction under an advisory lock, and are refused (409) when they would
+  leave no Active Platform Administrator.
+- **Frontend:**
+  - The user dialog drops the temporary password field.
+  - The drawer offers Archive and Restore, and shows an ARCHIVED status.
+  - The access controls are disabled on your own account and on archived
+    accounts, with an explanation derived from the same rule the server
+    applies.
+- **Verification:**
+  - Unit tests for the Google sign-in rule.
+  - The last-administrator guard against a disposable database, so the demo
+    administrators are never touched.
+  - API integration tests: Google-only creation, archive and restore (sessions,
+    sign-in, email reservation, edit and access refusal, no session revival),
+    404s, self guards.
+  - A live check through the dev server that changes no data: archiving your
+    own account is refused, and restoring an account that isn't archived is
+    refused.
+  - Results: backend suite 120 pass, 1 skip, 0 fail; frontend 21/21. After two
+    follow-up type fixes, both packages typecheck and the affected suites pass
+    (23/0).
+
+Still outstanding in phase 4:
+
+- Break-glass administrators: CLI-only creation and recovery, password plus TOTP.
+- Hotel Administrator scoping of User Management.
+- The `/user-management` route and API rename.
+- Granting or removing platform authority. No endpoint sets `platform_admin`
+  yet; today only the migration and `db:seed:admin` do.
+- Self-demotion through other paths: editing a role you hold, or a group you
+  belong to.
+- Recent-authentication for sensitive actions, and audit events.
+
 ## Remaining specification work
 
 Opaque PostgreSQL sessions, permanent revocation, cookie/CSRF migration, Google-only

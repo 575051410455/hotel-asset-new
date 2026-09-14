@@ -129,10 +129,10 @@ export const rolePermsSchema = z
     path: ['access'],
   });
 
+// A prepared account signs in with Google: it is created without any password.
 export const createUserSchema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email(),
-  password: z.string().min(6, 'Temp password must be at least 6 characters'),
   phone: z.string().max(32).nullish(),
   title: z.string().max(120).nullish(),
   department: z.string().max(80).nullish(),
